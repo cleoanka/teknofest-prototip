@@ -75,10 +75,7 @@ class PlateReader:
 
     def _read_once(self, crop: np.ndarray) -> Tuple[Optional[str], float]:
         if self.mode == "mock" or self._reader is None:
-            # Deterministik sahte plaka (kare içeriğinden türetilir)
-            seed = int(abs(crop.sum())) % 9000 + 1000
-            il = (int(abs(crop.mean() * 10)) % 81) + 1
-            return f"{il:02d}ABC{seed}", 0.93
+            return None, 0.0
         best_text, best_conf = None, 0.0
         for var in _variants(crop):
             w = min(1.0, _laplacian_sharpness(var) / 500.0)
@@ -93,15 +90,18 @@ class PlateReader:
             return PlateResult()
         text, conf = self._read_once(crop)
         norm = normalize_plate(text) if text else ""
-        if norm:
+        if norm and is_valid_tr_plate(norm):
             self._history.append(norm)
         # Pozisyon-bazlı çoğunluk konsensüsü (son N okuma)
         consensus = self._consensus()
         final = consensus or norm
+        # Geçerli TR formatı + yüksek güven olmadan gösterme
+        if not (final and is_valid_tr_plate(final) and conf >= 0.70):
+            return PlateResult()
         return PlateResult(
-            text=final or None,
+            text=final,
             confidence=round(conf, 3),
-            valid_format=is_valid_tr_plate(final),
+            valid_format=True,
         )
 
     def _consensus(self) -> Optional[str]:

@@ -126,8 +126,7 @@ class DriverMonitor:
                     state.headphone = True
             has_seatbelt = any(d.label == "seatbelt" and self._overlaps(roi, d.bbox)
                                for d in detections)
-            has_driver = any(d.label == "person" and self._overlaps(roi, d.bbox)
-                             for d in detections)
-            # Kemer sınıfı tespit edilebiliyorsa ve sürücü varsa, kemer yoksa ihlal
-            state.no_seatbelt = bool(has_driver and not has_seatbelt and profile == "critical")
+            # COCO ön-eğitimli modelde seatbelt sınıfı yok; yalnızca fine-tune
+            # modelinde has_seatbelt=True gelebilir. Aksi hâlde her zaman FP üretir.
+            state.no_seatbelt = bool(has_seatbelt is True and False)  # fine-tune gelene kadar devre dışı
         return state

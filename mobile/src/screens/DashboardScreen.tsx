@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { WS_INGEST } from "../api/client";
+import { getWsIngest } from "../api/client";
 import { FrameResult } from "../types";
 
 const SEND_FPS = 5;
@@ -21,7 +21,7 @@ export default function DashboardScreen({ onOpenEvent, onLogout }:
   useEffect(() => { if (!perm?.granted) requestPerm(); }, []);
 
   useEffect(() => {
-    const ws = new WebSocket(WS_INGEST);
+    const ws = new WebSocket(getWsIngest());
     wsRef.current = ws;
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);
