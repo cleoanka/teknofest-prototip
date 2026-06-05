@@ -38,6 +38,10 @@ def estimate_speed(track: Optional[Track], frame_w: int, frame_h: int,
         dc = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5 / diag
 
     movement = max(area_component, dc)
+    # Bbox jitterinden kaynaklanan gürültüyü filtrele
+    if movement < 0.003:
+        return None
     eff_fps = fps if dt <= 0 else (1.0 / dt)
     speed = s.speed_calibration_k * movement * (eff_fps / 30.0)
-    return round(max(0.0, min(speed, 250.0)), 1)
+    speed = round(max(0.0, min(speed, 250.0)), 1)
+    return speed if speed >= 3.0 else None

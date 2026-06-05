@@ -1,15 +1,20 @@
 import React, { useState } from "react";
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native";
-import { silentVerify } from "../api/client";
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Platform } from "react-native";
+import { setApiBase, silentVerify } from "../api/client";
+
+const DEFAULT_IP = "192.168.1.20:8000";
 
 export default function LoginScreen({ onSuccess }: { onSuccess: (token: string | null) => void }) {
+  const [serverHost, setServerHost] = useState(DEFAULT_IP);
   const [deviceToken, setDeviceToken] = useState("device-guard-01");
   const [phone, setPhone] = useState("+905320001122");
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
   const verify = async () => {
-    setBusy(true); setStatus("Şebeke üzerinden sessiz doğrulanıyor…");
+    setBusy(true);
+    setStatus("Sunucuya bağlanıyor…");
+    setApiBase(serverHost);
     try {
       const res = await silentVerify(deviceToken, phone);
       if (res.devicePhoneNumberVerified) {
@@ -29,6 +34,18 @@ export default function LoginScreen({ onSuccess }: { onSuccess: (token: string |
       <Text style={s.title}>Akıllı Yol Güvenliği</Text>
       <Text style={s.sub}>CAMARA Number Verification ile sessiz SIM doğrulama — SMS/kod yok.</Text>
 
+      <Text style={s.label}>Sunucu Adresi {Platform.OS === "android" ? "(Android)" : "(iOS)"}</Text>
+      <TextInput
+        style={s.input}
+        value={serverHost}
+        onChangeText={setServerHost}
+        placeholder="192.168.1.20:8000"
+        placeholderTextColor="#8a97bd"
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+      />
+
       <TextInput style={s.input} value={deviceToken} onChangeText={setDeviceToken}
         placeholder="Cihaz token" placeholderTextColor="#8a97bd" autoCapitalize="none" />
       <TextInput style={s.input} value={phone} onChangeText={setPhone}
@@ -39,6 +56,7 @@ export default function LoginScreen({ onSuccess }: { onSuccess: (token: string |
       </TouchableOpacity>
       <Text style={s.status}>{status}</Text>
       <Text style={s.hint}>Demo: device-guard-01 → +905320001122</Text>
+      <Text style={s.hint}>Mac IP: terminalde {"`"}ipconfig getifaddr en0{"`"}</Text>
     </View>
   );
 }
@@ -49,9 +67,10 @@ const s = StyleSheet.create({
   logoTxt: { color: "#fff", fontWeight: "800", fontSize: 26 },
   title: { color: "#e6ecff", fontSize: 24, fontWeight: "800", textAlign: "center" },
   sub: { color: "#8a97bd", fontSize: 13, textAlign: "center", marginVertical: 14 },
+  label: { color: "#8a97bd", fontSize: 12, marginBottom: 4 },
   input: { backgroundColor: "#1b2540", color: "#e6ecff", borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: "#25304f" },
   btn: { backgroundColor: "#2f7bff", borderRadius: 12, padding: 16, alignItems: "center", marginTop: 6 },
   btnTxt: { color: "#fff", fontWeight: "700", fontSize: 16 },
   status: { color: "#2ecc71", textAlign: "center", marginTop: 14, minHeight: 20 },
-  hint: { color: "#8a97bd", fontSize: 11, textAlign: "center", marginTop: 8 },
+  hint: { color: "#8a97bd", fontSize: 11, textAlign: "center", marginTop: 4 },
 });

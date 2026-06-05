@@ -8,15 +8,31 @@
     "splash": { "backgroundColor": "#0b1020" },
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.teknofest2026.yolguvenligi",
       "infoPlist": {
-        "NSCameraUsageDescription": "Canlı yol güvenliği analizi için kamera erişimi gereklidir."
+        "NSCameraUsageDescription": "Canlı yol güvenliği analizi için kamera erişimi gereklidir.",
+        "NSLocalNetworkUsageDescription": "Backend sunucusuna LAN üzerinden bağlanmak için gereklidir."
       }
     },
     "android": {
-      "permissions": ["CAMERA"]
+      "package": "com.teknofest2026.yolguvenligi",
+      "versionCode": 1,
+      "compileSdkVersion": 34,
+      "targetSdkVersion": 34,
+      "minSdkVersion": 24,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE"
+      ],
+      "usesCleartextTraffic": true
     },
     "plugins": [
-      ["expo-camera", { "cameraPermission": "Canlı analiz için kamera erişimi." }]
+      ["expo-camera", {
+        "cameraPermission": "Canlı yol güvenliği analizi için kamera erişimi gereklidir.",
+        "microphonePermission": false
+      }]
     ]
   }
 }
