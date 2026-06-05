@@ -51,10 +51,11 @@ class DriverState(BaseModel):
     fatigue: bool = False
     ear: Optional[float] = None      # Eye Aspect Ratio
     perclos: Optional[float] = None  # % göz kapalı oranı
-    phone_use: bool = False
+    phone_use: bool = False          # Yalnızca SÜRÜCÜ tarafında
     smoking: bool = False
     no_seatbelt: bool = False
     headphone: bool = False
+    passenger_phone: bool = False    # Yolcu tarafında telefon (tehlike sayılmaz)
 
 
 class Vehicle(BaseModel):
@@ -65,6 +66,10 @@ class Vehicle(BaseModel):
     plate: PlateResult = Field(default_factory=PlateResult)
     speed_kmh: Optional[float] = None
     bbox: Optional[BBox] = None
+    plate_bbox: Optional[BBox] = None    # Plaka kutusu (sarı)
+    driver_bbox: Optional[BBox] = None   # Sürücü tarafı ROI (mavi)
+    passenger_bbox: Optional[BBox] = None  # Yolcu tarafı ROI (turuncu)
+    swerving: bool = False               # Zigzag/şerit ihlali
 
 
 class RiskAssessment(BaseModel):

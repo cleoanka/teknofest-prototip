@@ -54,6 +54,32 @@ class Track:
             return 0.0
         return (cur - prev) / prev
 
+    def is_swerving(self, min_frames: int = 10, min_direction_changes: int = 2) -> bool:
+        """Araç sağ-sol-sağ / sol-sağ-sol zigzag yaparsa True döner (swerving tespiti)."""
+        if len(self.center_history) < min_frames:
+            return False
+        xs = [c[0] for c in self.center_history]
+        x_range = max(xs) - min(xs) if xs else 0
+        if x_range < 15:  # 15 pikselden az hareket → gürültü
+            return False
+        # 3-kare hareketli ortalama ile gürültüyü azalt
+        smoothed = []
+        for i in range(len(xs)):
+            window = xs[max(0, i - 2): i + 1]
+            smoothed.append(sum(window) / len(window))
+        # Yön değişikliği say
+        direction = 0
+        changes = 0
+        for i in range(1, len(smoothed)):
+            dx = smoothed[i] - smoothed[i - 1]
+            if abs(dx) < 2:
+                continue
+            new_dir = 1 if dx > 0 else -1
+            if direction != 0 and new_dir != direction:
+                changes += 1
+            direction = new_dir
+        return changes >= min_direction_changes
+
 
 class IOUTracker:
     def __init__(self, iou_threshold: float = 0.3, max_misses: int = 8):

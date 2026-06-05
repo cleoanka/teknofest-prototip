@@ -1,16 +1,17 @@
 """
 Sürücü durumu — yorgunluk (EAR/PERCLOS), telefon, sigara, kemer, kulaklık.
 
-- Yorgunluk: MediaPipe Face Mesh ile göz landmark'larından EAR; zaman penceresinde
-  PERCLOS. Kütüphane yoksa mock skor (kare içeriğinden deterministik).
-- Telefon/sigara/kemer/kulaklık: detector çıktısındaki nesnelerin sürücü ROI'siyle
-  kesişiminden kural-tabanlı çıkarım. (Sigara/kemer/kulaklık fine-tune sınıfları;
-  mevcut COCO modelinde yoksa mock/kural ile üretilir.)
+Türkiye LHD (sol direksiyonlu) araç varsayımı:
+  Kamera önden bakıyorsa sürücü kameranın SAĞ tarafındadır.
+  → Araç bbox'ının sağ yarısı = sürücü ROI, sol yarısı = yolcu ROI.
+
+Telefon kullanımı yalnızca sürücü ROI'sindeyse tehlike olarak işaretlenir.
+Yolcu ROI'sindeki telefon driver.passenger_phone=True olarak ayrı takip edilir.
 """
 from __future__ import annotations
 
 from collections import deque
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -26,7 +27,6 @@ _RIGHT_EYE = [362, 385, 387, 263, 373, 380]
 
 
 def _ear(pts) -> float:
-    # pts: 6x2 (p1..p6) ; EAR = (|p2-p6| + |p3-p5|) / (2|p1-p4|)
     p = np.asarray(pts, dtype=float)
     a = np.linalg.norm(p[1] - p[5])
     b = np.linalg.norm(p[2] - p[4])
@@ -43,8 +43,8 @@ class DriverMonitor:
             try:
                 import mediapipe as mp
                 self._mesh = mp.solutions.face_mesh.FaceMesh(
-                    static_image_mode=False, max_num_faces=1, refine_landmarks=True,
-                    min_detection_confidence=0.5,
+                    static_image_mode=False, max_num_faces=2, refine_landmarks=True,
+                    min_detection_confidence=0.4,
                 )
             except Exception:
                 self.mode = "mock"
@@ -60,20 +60,39 @@ class DriverMonitor:
         except Exception:
             return "mock"
 
-    def _fatigue_real(self, frame: np.ndarray) -> tuple[Optional[float], Optional[float], bool]:
+    def _fatigue_real(self, frame: np.ndarray, driver_roi: Optional[BBox]) -> Tuple[Optional[float], Optional[float], bool]:
         try:
             import cv2
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) if frame.ndim == 3 else frame
         except Exception:
             rgb = frame
         h, w = frame.shape[:2]
-        res = self._mesh.process(rgb)
+
+        # Sürücü ROI varsa yalnızca o bölgeyi analiz et
+        if driver_roi:
+            x1, y1 = max(0, int(driver_roi.x1)), max(0, int(driver_roi.y1))
+            x2, y2 = min(w, int(driver_roi.x2)), min(h, int(driver_roi.y2))
+            analyze = rgb[y1:y2, x1:x2]
+            offset_x, offset_y = x1, y1
+        else:
+            analyze = rgb
+            offset_x, offset_y = 0, 0
+
+        if analyze.size == 0:
+            self._eye_closed.append(0)
+            return None, self._perclos(), False
+
+        res = self._mesh.process(analyze)
         if not res.multi_face_landmarks:
             self._eye_closed.append(0)
             return None, self._perclos(), False
+
         lm = res.multi_face_landmarks[0].landmark
+        rh, rw = analyze.shape[:2]
+
         def pick(idx):
-            return [(lm[i].x * w, lm[i].y * h) for i in idx]
+            return [(lm[i].x * rw, lm[i].y * rh) for i in idx]
+
         ear = (_ear(pick(_LEFT_EYE)) + _ear(pick(_RIGHT_EYE))) / 2.0
         self._eye_closed.append(1 if ear < EAR_THRESHOLD else 0)
         perclos = self._perclos()
@@ -84,8 +103,7 @@ class DriverMonitor:
             return 0.0
         return round(sum(self._eye_closed) / len(self._eye_closed), 3)
 
-    def _fatigue_mock(self, frame: np.ndarray) -> tuple[Optional[float], Optional[float], bool]:
-        # Deterministik: parlaklık düşükse "göz kapalı" varsay (demo amaçlı)
+    def _fatigue_mock(self, frame: np.ndarray) -> Tuple[Optional[float], Optional[float], bool]:
         b = float(frame.mean()) if frame is not None and frame.size else 128.0
         ear = round(0.30 - (1.0 - min(b, 255) / 255.0) * 0.18, 3)
         self._eye_closed.append(1 if ear < EAR_THRESHOLD else 0)
@@ -93,40 +111,84 @@ class DriverMonitor:
         return ear, perclos, perclos > PERCLOS_FATIGUE
 
     @staticmethod
-    def _driver_roi(detections: List[Detection], frame_shape) -> Optional[BBox]:
-        """Araç kutusunun sol-üst kabin bölgesi (sürücü) yaklaşık ROI'si."""
-        veh = [d for d in detections if d.label == "vehicle"]
-        if not veh:
+    def driver_roi(vehicle_bbox: Optional[BBox], frame_shape) -> Optional[BBox]:
+        """
+        Türkiye LHD + önden kamera:
+        Sürücü kameranın SAĞ tarafında → araç bbox sağ yarısı.
+        Kabin yüksekliği: araç yüksekliğinin üst %70'i (camdan içeri).
+        """
+        if not vehicle_bbox:
             return None
-        v = max(veh, key=lambda d: d.bbox.area).bbox
+        v = vehicle_bbox
         w = v.x2 - v.x1
         h = v.y2 - v.y1
-        return BBox(x1=v.x1 + 0.05 * w, y1=v.y1 + 0.10 * h,
-                    x2=v.x1 + 0.55 * w, y2=v.y1 + 0.75 * h)
+        mid_x = v.x1 + 0.5 * w
+        # Sürücü: sağ yarı, kabin üst bölgesi
+        return BBox(
+            x1=mid_x,
+            y1=v.y1 + 0.05 * h,
+            x2=v.x2 - 0.02 * w,
+            y2=v.y1 + 0.80 * h,
+        )
+
+    @staticmethod
+    def passenger_roi(vehicle_bbox: Optional[BBox], frame_shape) -> Optional[BBox]:
+        """Yolcu: araç bbox sol yarısı."""
+        if not vehicle_bbox:
+            return None
+        v = vehicle_bbox
+        w = v.x2 - v.x1
+        h = v.y2 - v.y1
+        mid_x = v.x1 + 0.5 * w
+        return BBox(
+            x1=v.x1 + 0.02 * w,
+            y1=v.y1 + 0.05 * h,
+            x2=mid_x,
+            y2=v.y1 + 0.80 * h,
+        )
 
     @staticmethod
     def _overlaps(a: BBox, b: BBox) -> bool:
         return not (a.x2 < b.x1 or a.x1 > b.x2 or a.y2 < b.y1 or a.y1 > b.y2)
 
-    def assess(self, frame: np.ndarray, detections: List[Detection], profile: str) -> DriverState:
+    def assess(self, frame: np.ndarray, detections: List[Detection], profile: str,
+               vehicle_bbox: Optional[BBox] = None) -> DriverState:
         state = DriverState()
-        # Yorgunluk yalnızca kritik profilde (yüksek çözünürlük) güvenilir
+
+        droi = self.driver_roi(vehicle_bbox, frame.shape if frame is not None else (0, 0))
+        proi = self.passenger_roi(vehicle_bbox, frame.shape if frame is not None else (0, 0))
+
+        # Yorgunluk yalnızca kritik profilde güvenilir (yüksek çözünürlük)
         if profile == "critical" and frame is not None and frame.size:
-            ear, perclos, fatigue = (self._fatigue_real if self.mode == "real" else self._fatigue_mock)(frame)
+            if self.mode == "real":
+                ear, perclos, fatigue = self._fatigue_real(frame, droi)
+            else:
+                ear, perclos, fatigue = self._fatigue_mock(frame)
             state.ear, state.perclos, state.fatigue = ear, perclos, fatigue
 
-        roi = self._driver_roi(detections, frame.shape if frame is not None else (0, 0))
-        if roi is not None:
+        if droi is not None:
             for d in detections:
-                if d.label == "phone" and self._overlaps(roi, d.bbox):
-                    state.phone_use = True
-                elif d.label == "cigarette" and self._overlaps(roi, d.bbox):
-                    state.smoking = True
-                elif d.label == "headphone" and self._overlaps(roi, d.bbox):
-                    state.headphone = True
-            has_seatbelt = any(d.label == "seatbelt" and self._overlaps(roi, d.bbox)
-                               for d in detections)
-            # COCO ön-eğitimli modelde seatbelt sınıfı yok; yalnızca fine-tune
-            # modelinde has_seatbelt=True gelebilir. Aksi hâlde her zaman FP üretir.
-            state.no_seatbelt = bool(has_seatbelt is True and False)  # fine-tune gelene kadar devre dışı
+                in_driver = self._overlaps(droi, d.bbox)
+                in_passenger = proi is not None and self._overlaps(proi, d.bbox)
+
+                if d.label == "phone":
+                    if in_driver:
+                        state.phone_use = True      # Sürücü telefon → tehlike
+                    elif in_passenger:
+                        state.passenger_phone = True  # Yolcu telefon → kayıt ama tehlike değil
+                    else:
+                        # Araç içinde ama bölge belirlenemedi → konservatif: sürücü say
+                        state.phone_use = True
+
+                elif d.label == "cigarette":
+                    if in_driver:
+                        state.smoking = True
+
+                elif d.label == "headphone":
+                    if in_driver:
+                        state.headphone = True
+
+            # COCO'da emniyet kemeri sınıfı yok; fine-tune gelene kadar devre dışı
+            state.no_seatbelt = False
+
         return state
