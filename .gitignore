@@ -17,3 +17,7 @@ mock/sample_frames/*.jpg
 mock/*.mp4
 .DS_Store
 .pytest_cache/
+
+# Sunucu runtime dosyaları
+.server.pid
+server.log
