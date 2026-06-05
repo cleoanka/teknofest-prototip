@@ -1,0 +1,78 @@
+{
+  "_aciklama": "Açık kaynak veri kaynakları manifesti (plan.md Bölüm 4 tablosunun makine-okunur hâli). Her kaynak hangi sınıf(lar)ı, nereden, hangi lisansla sağladığını bildirir. fetch_data.py bunu okur: list/coverage/validate (ağsız) ve fetch (gerçek indirme). JSON kullanıldı (PyYAML eklemekten kaçınmak için, bkz. PROGRESS K-007).",
+  "target_classes": ["vehicle", "license_plate", "person", "phone", "cigarette", "seatbelt", "headphone"],
+  "sources": [
+    {
+      "name": "coco-vehicle-person",
+      "type": "coco_json",
+      "classes": ["vehicle", "person"],
+      "location": "datasets/raw/coco/annotations/instances_train2017.json",
+      "license": "CC-BY-4.0",
+      "notes": "COCO car/truck/bus/motorcycle -> vehicle; person -> person. prepare_dataset.coco ile dönüştür."
+    },
+    {
+      "name": "coco-phone",
+      "type": "coco_json",
+      "classes": ["phone"],
+      "location": "datasets/raw/coco/annotations/instances_train2017.json",
+      "license": "CC-BY-4.0",
+      "notes": "COCO 'cell phone' -> phone. Sürücü-elinde-telefon için State Farm seti ile güçlendir."
+    },
+    {
+      "name": "bdd100k-driving",
+      "type": "http_zip",
+      "classes": ["vehicle", "person"],
+      "location": "https://doc.bdd100k.com/download.html",
+      "license": "BSD-3-Clause",
+      "notes": "~110K sürüş sahnesi (gündüz/gece/yağmur) — genelleme için kritik. Elle indir, sonra dönüştür."
+    },
+    {
+      "name": "ccpd-plate",
+      "type": "http_zip",
+      "classes": ["license_plate"],
+      "location": "https://github.com/detectRecog/CCPD",
+      "license": "academic",
+      "notes": "~300K+ plaka, Çin ağırlıklı. Kutu tespiti için iyi genelleşir; TR-OCR için roboflow-tr-plate gerekli."
+    },
+    {
+      "name": "roboflow-tr-plate",
+      "type": "roboflow",
+      "classes": ["license_plate"],
+      "location": "workspace/turkish-license-plates/1",
+      "license": "roboflow",
+      "notes": "TR plaka biçimi. ROBOFLOW_API_KEY gerekir; lokasyonu gerçek proje/sürümle güncelle."
+    },
+    {
+      "name": "roboflow-phone-distracted",
+      "type": "roboflow",
+      "classes": ["phone"],
+      "location": "workspace/distracted-driver-phone/1",
+      "license": "roboflow",
+      "notes": "Sürücü elinde telefon. ROBOFLOW_API_KEY gerekir."
+    },
+    {
+      "name": "roboflow-smoking",
+      "type": "roboflow",
+      "classes": ["cigarette"],
+      "location": "workspace/smoking-detection/1",
+      "license": "roboflow",
+      "notes": "Sigara (nadir sınıf). Augmentation kopya-yapıştır ile çoğalt (plan 4.1)."
+    },
+    {
+      "name": "roboflow-seatbelt",
+      "type": "roboflow",
+      "classes": ["seatbelt"],
+      "location": "workspace/seatbelt-detection/1",
+      "license": "roboflow",
+      "notes": "Emniyet kemeri takılı/değil dengesi önemli."
+    },
+    {
+      "name": "manual-headphone",
+      "type": "manual",
+      "classes": ["headphone"],
+      "location": "datasets/raw/headphone",
+      "license": "own",
+      "notes": "Açık kaynak az → birkaç yüz kare kendi etiketle (CVAT/labelImg) + sentetik çeşitleme (plan 4 tablo)."
+    }
+  ]
+}
