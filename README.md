@@ -72,7 +72,12 @@ Normal → Tehlike Tespit → 5G QoD API → Bant 5→20 Mbps → Kritik Analiz 
 ### 1 — Backend + Web Dashboard
 
 ```bash
-./run_dev.sh          # venv kurar, bağımlılıkları indirir, sunucuyu başlatır
+./run_dev.sh start    # arka planda başlat (önerilen)
+./run_dev.sh stop     # durdur
+./run_dev.sh restart  # yeniden başlat
+./run_dev.sh status   # çalışıyor mu?
+./run_dev.sh logs     # canlı log takibi
+./run_dev.sh          # ön planda başlat (eski davranış)
 ```
 
 > İlk çalıştırmada YZ modelleri internet'ten indirilir — birkaç dakika sürebilir.
