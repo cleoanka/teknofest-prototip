@@ -31,7 +31,8 @@ def ocr_corrections(text: str) -> str:
     if not text or len(text) < 5:
         return text
     t = list(text)
-    digit_map = {"O": "0", "I": "1", "S": "5", "B": "8", "Z": "2", "G": "6"}
+    digit_map = {"O": "0", "I": "1", "S": "5", "B": "8", "Z": "2", "G": "6",
+                 "J": "3", "D": "0", "Q": "0", "U": "0"}
     alpha_map = {"0": "O", "1": "I", "5": "S", "8": "B"}
 
     # İlk 2 karakter (il kodu) → rakam olmalı
@@ -55,11 +56,22 @@ def is_valid_tr_plate(text: str) -> bool:
 
 
 def super_resolve(crop: np.ndarray, scale: int = 4) -> np.ndarray:
-    """LANCZOS4 ölçekleme + bilateral filtre + keskinleştirme."""
+    """Gamma + LANCZOS4 ölçekleme + CLAHE + bilateral + keskinleştirme."""
     try:
         import cv2
         h, w = crop.shape[:2]
+        # Gamma correction for dark frames (underground parking etc.)
+        mean_brightness = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY).mean() if crop.ndim == 3 else crop.mean()
+        if mean_brightness < 80:
+            gamma = 0.35
+            lut = np.array([np.clip(((i / 255.0) ** gamma) * 255, 0, 255) for i in range(256)], dtype=np.uint8)
+            crop = cv2.LUT(crop, lut)
         big = cv2.resize(crop, (w * scale, h * scale), interpolation=cv2.INTER_LANCZOS4)
+        # CLAHE on luminance for low-light robustness
+        gray = cv2.cvtColor(big, cv2.COLOR_BGR2GRAY) if big.ndim == 3 else big
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+        enh = clahe.apply(gray)
+        big = cv2.cvtColor(enh, cv2.COLOR_GRAY2BGR)
         filtered = cv2.bilateralFilter(big, 9, 75, 75)
         kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]], dtype=np.float32)
         return cv2.filter2D(filtered, -1, kernel)
@@ -101,8 +113,9 @@ class PlateReader:
     def _init_reader(self):
         try:
             import easyocr
-            # tr dili ekle: Türk plakasındaki karakterler için
-            self._reader = easyocr.Reader(["en", "tr"], gpu=False, verbose=False)
+            # Türk plakası yalnızca A-Z + 0-9 kullanır → "en" modeli yeterli
+            # "tr" eklemek latin_g2.pth (~65MB) indirir, gereksiz
+            self._reader = easyocr.Reader(["en"], gpu=False, verbose=False)
         except Exception as e:
             print(f"[PlateOCR] EasyOCR başlatılamadı: {e}")
             self.mode = "mock"
@@ -161,7 +174,7 @@ class PlateReader:
         final = consensus or norm
 
         # LP detector tarafından kesilmiş bölgede güven eşiği biraz daha düşük olabilir
-        if not (final and is_valid_tr_plate(final) and conf >= 0.45):
+        if not (final and is_valid_tr_plate(final) and conf >= 0.30):
             return PlateResult()
 
         return PlateResult(text=final, confidence=round(conf, 3), valid_format=True)

@@ -73,10 +73,10 @@ def _fallback_plate_crop(frame: np.ndarray, vehicle_bbox: BBox) -> Optional[np.n
     v = vehicle_bbox
     w = v.x2 - v.x1
     h = v.y2 - v.y1
-    px1 = int(v.x1 + 0.15 * w)
-    px2 = int(v.x2 - 0.15 * w)
-    py1 = int(v.y1 + 0.58 * h)
-    py2 = int(v.y2 - 0.02 * h)
+    px1 = int(v.x1 + 0.05 * w)
+    px2 = int(v.x2 - 0.05 * w)
+    py1 = int(v.y1 + 0.50 * h)
+    py2 = int(v.y2 - 0.01 * h)
     crop = frame[max(0, py1):py2, max(0, px1):px2]
     return crop if crop.size > 0 else None
 
