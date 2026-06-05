@@ -132,6 +132,12 @@ function render(d) {
   els("speed").textContent = d.vehicle.speed_kmh != null ? d.vehicle.speed_kmh + " km/h" : "—";
   els("vtype").textContent = d.vehicle.vtype || "—";
   els("vcolor").textContent = d.vehicle.color || "—";
+  // Swerving göstergesi
+  const swEl = els("swerving");
+  if (swEl) {
+    swEl.textContent = d.vehicle.swerving ? "⚠ SWERVING" : "—";
+    swEl.style.color = d.vehicle.swerving ? "#ff3333" : "inherit";
+  }
   // risk
   const r = d.risk;
   els("riskScore").textContent = r.score;
@@ -141,19 +147,83 @@ function render(d) {
   els("riskFactors").innerHTML = (r.factors || []).map(f => `<span class="tag">${f}</span>`).join("");
 }
 
+function drawBox(x1, y1, x2, y2, color, label, lineW = 2) {
+  const sx = overlay.width / 640;
+  const x = x1 * sx, y = y1 * sx, w = (x2 - x1) * sx, h = (y2 - y1) * sx;
+  octx.lineWidth = lineW; octx.strokeStyle = color; octx.strokeRect(x, y, w, h);
+  if (label) {
+    octx.font = "13px Inter, sans-serif";
+    const tw = octx.measureText(label).width;
+    octx.fillStyle = color;
+    octx.fillRect(x, y - 18, tw + 10, 18);
+    octx.fillStyle = "#000";
+    octx.fillText(label, x + 5, y - 4);
+  }
+}
+
+function drawROI(x1, y1, x2, y2, color, label) {
+  const sx = overlay.width / 640;
+  const x = x1 * sx, y = y1 * sx, w = (x2 - x1) * sx, h = (y2 - y1) * sx;
+  octx.save();
+  octx.setLineDash([6, 4]);
+  octx.lineWidth = 1.5; octx.strokeStyle = color; octx.strokeRect(x, y, w, h);
+  octx.restore();
+  if (label) {
+    octx.font = "11px Inter, sans-serif";
+    octx.fillStyle = color;
+    octx.fillText(label, x + 4, y + 14);
+  }
+}
+
 function drawOverlay(d) {
   octx.clearRect(0, 0, overlay.width, overlay.height);
-  const sx = overlay.width / 640, sy = sx; // ingest 640 genişliğinde gönderildi
+
+  // 1. Araç tespitleri (nesne listesi)
   (d.detections || []).forEach(det => {
     const b = det.bbox;
-    const x = b.x1 * sx, y = b.y1 * sy, w = (b.x2 - b.x1) * sx, h = (b.y2 - b.y1) * sy;
-    const color = det.label === "vehicle" ? "#2f7bff" : det.label === "phone" ? "#ff4d5e" : "#2ecc71";
-    octx.lineWidth = 3; octx.strokeStyle = color; octx.strokeRect(x, y, w, h);
-    octx.fillStyle = color; octx.font = "14px Inter, sans-serif";
-    const txt = `${det.label} ${(det.confidence * 100) | 0}%`;
-    octx.fillRect(x, y - 18, octx.measureText(txt).width + 10, 18);
-    octx.fillStyle = "#fff"; octx.fillText(txt, x + 5, y - 4);
+    if (det.label === "vehicle") return; // araç ayrı çizilir
+    if (det.label === "phone") {
+      drawBox(b.x1, b.y1, b.x2, b.y2, "#ff4d5e", `telefon ${(det.confidence*100)|0}%`);
+    } else if (det.label === "person") {
+      drawBox(b.x1, b.y1, b.x2, b.y2, "#ffffff", `kişi ${(det.confidence*100)|0}%`, 1);
+    } else {
+      drawBox(b.x1, b.y1, b.x2, b.y2, "#2ecc71", `${det.label} ${(det.confidence*100)|0}%`, 1);
+    }
   });
+
+  // 2. Araç kutusu (yeşil / kırmızı swerving)
+  const v = d.vehicle || {};
+  if (v.bbox) {
+    const b = v.bbox;
+    const swerving = v.swerving;
+    const plateText = v.plate?.text || "";
+    const speed = v.speed_kmh != null ? `${v.speed_kmh} km/h` : "";
+    const vtype = v.vtype || "araç";
+    let label = [vtype, plateText, speed].filter(Boolean).join(" | ");
+    if (swerving) label = "⚠ SWERVING — " + label;
+    drawBox(b.x1, b.y1, b.x2, b.y2, swerving ? "#ff3333" : "#00e676", label, 3);
+  }
+
+  // 3. Plaka kutusu (sarı — LP dedektörden)
+  if (v.plate_bbox) {
+    const b = v.plate_bbox;
+    const plateText = v.plate?.text || "?";
+    drawBox(b.x1, b.y1, b.x2, b.y2, "#ffee00", `PLAKA: ${plateText}`, 2);
+  }
+
+  // 4. Sürücü ROI (mavi kesikli)
+  if (v.driver_bbox) {
+    const b = v.driver_bbox;
+    const phoneLabel = d.driver?.phone_use ? " [TELEFON!]" : "";
+    drawROI(b.x1, b.y1, b.x2, b.y2, "#29b6f6", `SÜRÜCÜ${phoneLabel}`);
+  }
+
+  // 5. Yolcu ROI (turuncu kesikli)
+  if (v.passenger_bbox) {
+    const b = v.passenger_bbox;
+    const paxPhone = d.driver?.passenger_phone ? " [telefon]" : "";
+    drawROI(b.x1, b.y1, b.x2, b.y2, "#ffa726", `YOLCU${paxPhone}`);
+  }
 }
 
 /* ── Olaylar (periyodik) ─────────────────────────────────────────────── */

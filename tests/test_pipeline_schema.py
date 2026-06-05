@@ -19,8 +19,13 @@ def test_pipeline_reads_plate_in_critical(synthetic_frame):
     res, ctx = pipe.process(synthetic_frame, critical=True)
     assert res.mode == "CRITICAL"
     assert res.vehicle.present is True
-    # Kritik modda plaka OCR çalışır (mock deterministik plaka üretir)
-    assert res.vehicle.plate.text is not None
+    # Mock modda gerçek OCR çalışmaz — plaka alanları None olabilir (sahte plaka üretilmez)
+    # Önemli olan: PlateResult nesnesi mevcut olmalı ve geçerli formatta olmalı
+    assert res.vehicle.plate is not None
+    assert isinstance(res.vehicle.plate.confidence, float)
+    # Sürücü/yolcu ROI alanları kritik modda hesaplanır
+    assert res.vehicle.driver_bbox is not None
+    assert res.vehicle.passenger_bbox is not None
 
 
 def test_output_json_under_3kb(synthetic_frame):

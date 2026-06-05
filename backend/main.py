@@ -9,14 +9,15 @@ abonelerine yayınlanır. Riskli olaylar SQLite'a yazılır.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from contextlib import asynccontextmanager
 from typing import Set
 
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -161,6 +162,87 @@ async def clear():
     return {"cleared": True}
 
 
+@app.post("/api/test-video")
+async def test_video(
+    file: UploadFile = File(None),
+    filename: str = Form(default=""),
+    every_n: int = Form(default=3),
+    scale: float = Form(default=0.5),
+):
+    """
+    Video dosyasını YZ hattından geçirip annotated video + JSON özeti döner.
+
+    Kullanım:
+    - file: Video dosyası yükle (multipart)
+    - filename: project-files/test-verisi/ içindeki dosya adı (örn: video_3.mp4)
+    - every_n: Her N. kareyi işle
+    - scale: Çözünürlük ölçeği (0.5 önerilir — işlem hızı için)
+    """
+    import tempfile
+    import shutil
+    from tools.test_video import process_video
+
+    # Dosya yolu belirle
+    if file and file.filename:
+        # Yüklenen dosyayı geçici klasöre kaydet
+        suffix = os.path.splitext(file.filename)[1] or ".mp4"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        shutil.copyfileobj(file.file, tmp)
+        tmp.flush()
+        video_path = tmp.name
+        cleanup = True
+    elif filename:
+        # Proje içindeki mevcut dosyayı kullan
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        video_path = os.path.join(root, "project-files", "test-verisi", filename)
+        cleanup = False
+    else:
+        raise HTTPException(status_code=400, detail="file veya filename gerekli")
+
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail=f"Video bulunamadı: {video_path}")
+
+    out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+    os.makedirs(out_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(video_path))[0]
+    out_video = os.path.join(out_dir, f"{base}_annotated.mp4")
+    out_json = os.path.join(out_dir, f"{base}_results.json")
+
+    try:
+        loop = asyncio.get_event_loop()
+        summary = await loop.run_in_executor(
+            None,
+            lambda: process_video(
+                video_path=video_path,
+                every_n=every_n,
+                scale=scale,
+                out_path=out_video,
+                json_out=out_json,
+            )
+        )
+    finally:
+        if cleanup:
+            os.unlink(video_path)
+
+    return {
+        **summary,
+        "output_video_url": f"/output/{base}_annotated.mp4" if os.path.exists(out_video) else None,
+        "output_json_url": f"/output/{base}_results.json" if os.path.exists(out_json) else None,
+    }
+
+
+@app.get("/api/test-video/files")
+async def list_test_videos():
+    """Proje içindeki test videoları listele."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    test_dir = os.path.join(root, "project-files", "test-verisi")
+    if not os.path.isdir(test_dir):
+        return {"files": []}
+    files = [f for f in os.listdir(test_dir)
+             if f.lower().endswith((".mp4", ".avi", ".mov", ".mkv"))]
+    return {"files": sorted(files), "directory": test_dir}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # WebSocket
 # ──────────────────────────────────────────────────────────────────────────────
@@ -222,8 +304,12 @@ async def ws_detections(ws: WebSocket):
         state.subscribers.discard(ws)
 
 
+# Annotated video çıktısını servis et
+_output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+os.makedirs(_output_dir, exist_ok=True)
+app.mount("/output", StaticFiles(directory=_output_dir), name="output")
+
 # Web dashboard'u kök yoldan servis et (varsa)
-import os  # noqa: E402
 _frontend = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 if os.path.isdir(_frontend):
     app.mount("/", StaticFiles(directory=_frontend, html=True), name="frontend")
