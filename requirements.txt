@@ -1,0 +1,24 @@
+# ── TEKNOFEST 2026 — 5G & YZ Akıllı Yol Güvenliği — Backend/YZ bağımlılıkları ──
+# Çekirdek backend
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+websockets==14.1
+python-multipart==0.0.20
+httpx==0.28.1
+
+# Görüntü işleme / YZ çıkarımı
+numpy>=1.26,<2.2
+opencv-python-headless==4.10.0.84
+pillow==11.0.0
+
+# ── İsteğe bağlı (gerçek model çıkarımı). Yoksa sistem MOCK moda düşer. ──
+# Mac (Apple Silicon) için: torch MPS hızlandırması otomatik kullanılır.
+ultralytics==8.3.55        # YOLOv8/v11 — araç + araç içi nesne tespiti
+easyocr==1.7.2             # Plaka OCR (PaddleOCR alternatifi, kurulumu kolay)
+mediapipe==0.10.35         # Yüz mesh -> EAR/PERCLOS yorgunluk
+
+# Test
+pytest==8.3.4
+pytest-asyncio==0.25.0
