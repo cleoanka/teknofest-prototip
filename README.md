@@ -2,6 +2,15 @@
 
 **TEKNOFEST 2026 · 5G & Yapay Zeka ile Akıllı Yol Güvenliği Yarışması (Turkcell)**
 
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
+![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-purple)
+![React Native](https://img.shields.io/badge/React%20Native-Expo-61DAFB?logo=react&logoColor=white)
+![Tests](https://img.shields.io/badge/Tests-38%20geçiyor-brightgreen)
+![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-lightgrey)
+![5G](https://img.shields.io/badge/5G-CAMARA%20QoD-red)
+![Lisans](https://img.shields.io/badge/Lisans-MIT-green)
+
 Bu depo; canlı video akışını yapay zeka ile işleyen, **yalnızca ihtiyaç anında**
 5G CAMARA **Quality on Demand (QoD)** API'siyle bant genişliğini yükselten ve
 sonuçları mobil uygulama + güvenlik konsolu üzerinde gösteren uçtan uca bir
@@ -15,91 +24,203 @@ ile birebir): **Mobil uygulama (ön yüz) ↔ Backend ↔ YZ çıkarım hattı**
 
 ---
 
-## Puanlama kriterleriyle eşleşme (şartname Tablo 1)
+## Kol Rehberleri (Yeni Başlayanlar Buradan)
 
-| Kriter | Ağırlık | Bu projede karşılığı |
-|---|---|---|
-| YZ analizi doğruluk/hassasiyet (araç, plaka, gerçek hız, araç içi nesne) | **%40** | `ai/pipeline.py` — YOLOv8 + OCR + MediaPipe + hız + risk; Normal/Kritik profil. `eval/evaluate.py` doğruluğu ölçer. |
-| 5G QoD API entegrasyonu — **yalnız ihtiyaç anında** bant yükseltme | **%40** | `ai/qod_trigger.py` (500ms, A–E koşul motoru) + `backend/qod_manager.py` + mock CAMARA QoD/NumVerif. Bant verimliliği raporlanır. |
-| Yazılım mimarisi & modern pratikler (rapor/sunum) | **%20** | Katmanlı mimari, tip-güvenli şema, test paketi, `ARCHITECTURE.md`. |
+Projeye yeni katıldıysan, koluna göre ilgili belgeyi oku:
 
----
+| Kol | Rehber | Ne Anlatıyor |
+|-----|--------|-------------|
+| 🤖 **YZ** | [`docs/yz.md`](docs/yz.md) | YOLO, plaka OCR, hız tahmini, sürücü analizi |
+| 🖥️ **API** | [`docs/api.md`](docs/api.md) | FastAPI, WebSocket, CAMARA entegrasyonu |
+| 📱 **Mobil** | [`docs/mobil.md`](docs/mobil.md) | React Native, Expo, iOS & Android |
+| 🔗 **Entegrasyon** | [`docs/entegrasyon.md`](docs/entegrasyon.md) | Test, web arayüzü, sistem bütünleştirme |
+| 📝 **Rapor** | [`docs/rapor.md`](docs/rapor.md) | Yarışma kriterleri, sunum, demo senaryosu |
+| 📖 **Genel** | [`docs/basics.md`](docs/basics.md) | Projeyi sıfırdan anlatan giriş rehberi |
 
-## Hızlı başlangıç
-
-### 1) Backend + Web Dashboard
-```bash
-cd teknofest-prototip
-chmod +x run_dev.sh && ./run_dev.sh         # venv kurar, bağımlılıkları indirir, sunucuyu açar
-# veya:  make install && make run
-```
-Tarayıcıda **http://localhost:8000/** → sessiz SIM doğrulama → "Kamerayı Başlat".
-Mac dahili kamera veya **iPhone** (Continuity / Safari) kamerası kullanılabilir.
-
-### 2) Mobil uygulama (Expo — ana ön yüz)
-```bash
-cd mobile && npm install
-# src/api/client.ts -> API_BASE'i Mac LAN IP'sine ayarla (ipconfig getifaddr en0)
-npx expo start            # iPhone'da Expo Go ile QR okut
-```
-
-### 3) Testler ve değerlendirme
-```bash
-make test                 # 38 test (mock modda deterministik)
-make eval                 # mock veri üretir + Normal vs Kritik doğruluk karşılaştırır
-```
+> **Hiç bilmiyorum, nereden başlayayım?** → [`docs/basics.md`](docs/basics.md)
 
 ---
 
-## Senaryo akışı (uçtan uca)
+## Ne Yapıyor? (30 Saniye Özet)
 
-1. **Sessiz giriş** — Mobil/konsol, CAMARA **Number Verification** ile SIM↔numara
-   eşleşmesini şebekeye doğrulatır (SMS/kod yok).
-2. **Normal mod** — Kamera 480p akar; hafif model (`yolov8n`) yalnız **araç varlığı,
-   bbox büyümesi ve güven** izler. Bant düşük tutulur.
-3. **QoD tetik** — 500 ms döngüde A–E koşullarından ikisi ardışık pozitif olunca
-   **CAMARA QoD** ile yüksek bant (5→20 Mbps) talep edilir, akış 1080p'ye geçer,
-   **ağır model** (`yolov8s` + OCR + MediaPipe) devreye girer.
-4. **Kritik mod** — Plaka OCR, gerçek hız, araç içi nesne, sürücü davranışı
-   (yorgunluk/telefon/sigara/kemer) tespit edilir, **risk skoru** üretilir.
-5. **Bırakma** — Yüksek güven / süre dolumu / araç ROI dışına çıkınca QoD oturumu
-   `DELETE` edilir, sistem Normal'e döner. **Bant yalnız ihtiyaç süresince yüksek.**
-6. **Gösterim** — Sonuçlar WebSocket ile mobil/konsola (<3 KB JSON) gelir; riskli
-   olaylar SQLite'a kaydedilir (`/api/events`).
+```
+📷 Kamera  ──kare──►  🖥️ Backend  ──kare──►  🤖 YZ (YOLO + OCR)
+           ◄──sonuç──             ◄──sonuç──
+
+Normal → Tehlike Tespit → 5G QoD API → Bant 5→20 Mbps → Kritik Analiz → Bant 20→5 Mbps
+```
+
+1. Kamera görüntüyü saniyede 7 kez backend'e gönderir
+2. YZ araç, plaka, sürücü davranışı ve risk skorunu hesaplar
+3. Tehlike varsa **CAMARA QoD** ile 5G bant genişliği **otomatik artırılır**
+4. Tehlike geçince bant düşer — sürekli yüksek bant yok, sadece gerektiğinde
 
 ---
 
-## Proje yapısı
+## Puanlama Kriterleri (Şartname Tablo 1)
+
+| Kriter | Ağırlık | Karşılığı |
+|--------|---------|----------|
+| YZ doğruluğu (araç, plaka, hız, araç içi nesne) | **%40** | `ai/pipeline.py` — YOLOv8 + OCR + MediaPipe + risk |
+| 5G QoD — **yalnız ihtiyaç anında** bant yükseltme | **%40** | `ai/qod_trigger.py` (A–E koşul motoru) + `backend/qod_manager.py` |
+| Mimari & modern pratikler | **%20** | Katmanlı mimari, tip-güvenli şema, 38 test, `ARCHITECTURE.md` |
+
+---
+
+## Hızlı Başlangıç
+
+### 1 — Backend + Web Dashboard
+
+```bash
+./run_dev.sh          # venv kurar, bağımlılıkları indirir, sunucuyu başlatır
+```
+
+> İlk çalıştırmada YZ modelleri internet'ten indirilir — birkaç dakika sürebilir.
+
+Tarayıcıda `http://localhost:8000/` → Giriş Yap → **Kamerayı Başlat**.
+
+Alternatif:
+
+```bash
+make install          # sanal ortam + paketler
+make run              # sunucuyu başlat
+```
+
+### 2 — Mobil Uygulama (iOS & Android)
+
+```bash
+cd mobile
+npm install
+npx expo start        # QR kodu telefonla okut (Expo Go uygulaması gerekli)
+```
+
+> Giriş ekranında **Sunucu Adresi** kutusuna Mac'in LAN IP'sini gir:
+> ```bash
+> ipconfig getifaddr en0   # örn: 192.168.1.35 → 192.168.1.35:8000
+> ```
+
+### 3 — Testler & Değerlendirme
+
+```bash
+make test             # 38 pytest testi (model gerektirmez, mock modda çalışır)
+make eval             # sentetik veri + Normal/Kritik doğruluk raporu
+```
+
+---
+
+## Senaryo Akışı (Uçtan Uca)
+
+```
+1. SIM Doğrulama    CAMARA Number Verification — SMS/kod yok, sessiz
+        ↓
+2. Normal Mod       480p · 5 Mbps · YOLOv8n · araç varlığı izlenir
+        ↓
+3. QoD Tetik        500ms döngüde A–E koşullarından 2 ardışık pozitif
+        ↓
+4. Kritik Mod       1080p · 20 Mbps · YOLOv8s + OCR + MediaPipe
+                    Plaka, hız, telefon, yorgunluk, risk skoru
+        ↓
+5. Bırakma          Yüksek güven / süre dolumu / araç uzaklaştı
+                    → CAMARA QoD DELETE → Bant 5 Mbps'e döner
+        ↓
+6. Gösterim         WebSocket → Mobil/Web · Olaylar SQLite'a kaydedilir
+```
+
+---
+
+## Proje Yapısı
+
 ```
 teknofest-prototip/
-├── ai/                 YZ çıkarım hattı
-│   ├── detector.py     YOLOv8 (gerçek) / mock dedektör
-│   ├── plate_ocr.py    Çok-varyantlı plaka OCR + konsensüs
-│   ├── driver_state.py MediaPipe EAR/PERCLOS yorgunluk + davranış
-│   ├── speed.py        Kalibrasyonsuz bbox-tabanlı hız
-│   ├── risk.py         Risk skor motoru
-│   ├── tracking.py     IOU takip (track_id, bbox büyüme)
-│   ├── qod_trigger.py  Akıllı QoD tetik motoru (A–E)  ← %40 kriter çekirdeği
-│   ├── pipeline.py     Uçtan uca orkestrasyon
-│   └── training/       Fine-tune sistemi (data.yaml, train.py)
-├── backend/            FastAPI (REST+WS) + mock CAMARA + olay deposu
-│   ├── main.py         API + WebSocket uçları
-│   ├── qod_manager.py  Tetik motoru ↔ CAMARA QoD köprüsü
-│   └── camara/         Mock QoD + Number Verification API'leri
-├── frontend/           Web dashboard (güvenlik konsolu, getUserMedia)
-├── mobile/             React Native / Expo uygulaması (ana ön yüz)
-├── mock/               Sentetik test videosu + ground-truth
-├── eval/               Normal vs Kritik doğruluk değerlendirmesi
-└── tests/              pytest paketi (38 test)
+│
+├── ai/                  🤖 YZ çıkarım hattı
+│   ├── detector.py          YOLOv8 (gerçek) / mock dedektör
+│   ├── plate_ocr.py         Plaka OCR + konsensüs (EasyOCR)
+│   ├── driver_state.py      MediaPipe EAR/PERCLOS + davranış
+│   ├── speed.py             Kalibrasyonsuz bbox-tabanlı hız
+│   ├── risk.py              Risk skor motoru (0–100)
+│   ├── tracking.py          IOU takip (track_id, bbox büyüme)
+│   ├── qod_trigger.py       ← %40 kriter çekirdeği: A–E koşul motoru
+│   ├── pipeline.py          Uçtan uca orkestrasyon
+│   └── training/            Fine-tune sistemi
+│
+├── backend/             🖥️ FastAPI sunucu
+│   ├── main.py              REST + WebSocket uç noktaları
+│   ├── qod_manager.py       Tetik motoru ↔ CAMARA köprüsü
+│   ├── db.py                SQLite olay deposu
+│   └── camara/              Mock QoD + Number Verification
+│
+├── frontend/            🌐 Web güvenlik konsolu
+├── mobile/              📱 React Native / Expo (iOS & Android)
+├── tests/               ✅ 38 pytest testi
+├── eval/                📊 Doğruluk değerlendirmesi
+├── mock/                🎭 Sentetik test verisi
+├── docs/                📚 Kol rehberleri
+└── config/settings.py   ⚙️  Tüm parametreler tek yerden
 ```
 
+---
+
 ## Yapılandırma
-Tüm eşikler, sınıflar ve QoD parametreleri tek yerden: `config/settings.py` ve
-`.env` (örnek: `.env.example`). Komitenin paylaşacağı **nihai etiket sınıfları ve
-çıktı formatı** geldiğinde yalnızca `config/settings.py` + `ai/schema.py` güncellenir.
 
-## Gerçek modele geçiş
-`pip install ultralytics easyocr mediapipe` → `AI_MODE=auto` ile sistem otomatik
-gerçek modele geçer. Mac'te (Apple Silicon) YOLO otomatik **MPS** hızlandırması kullanır.
+Tüm eşikler, sınıflar ve QoD parametreleri `config/settings.py` ve `.env` üzerinden:
 
-Detaylı mimari için: **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+```bash
+cp .env.example .env
+# .env içini ihtiyaca göre düzenle
+```
+
+| Parametre | Varsayılan | Açıklama |
+|-----------|-----------|---------|
+| `AI_MODE` | `auto` | `real` / `mock` / `auto` |
+| `CONF_NORMAL` | `0.35` | Normal mod tespit güven eşiği |
+| `QOD_EVAL_PERIOD_MS` | `500` | QoD değerlendirme aralığı |
+| `SPEED_CALIBRATION_K` | `900.0` | Hız kalibrasyon sabiti |
+| `SPEED_LIMIT_KMH` | `50.0` | Hız aşımı eşiği |
+
+---
+
+## Gerçek Modele Geçiş
+
+```bash
+pip install ultralytics easyocr mediapipe
+```
+
+`AI_MODE=auto` (varsayılan) ile sistem paketler kuruluysa otomatik gerçek modele geçer.
+Mac Apple Silicon'da YOLO otomatik **MPS** hızlandırması kullanır.
+
+---
+
+## API Özeti
+
+| Uç Nokta | Yöntem | Açıklama |
+|----------|--------|---------|
+| `/api/health` | GET | Sistem sağlık kontrolü |
+| `/api/events` | GET | Riskli olay listesi |
+| `/api/qod/status` | GET | Bant genişliği durumu |
+| `/camara/number-verification:verify` | POST | Sessiz SIM doğrulama |
+| `/camara/qod/sessions` | POST | QoD oturumu aç |
+| `/camara/qod/sessions/{id}` | DELETE | QoD oturumunu kapat |
+| `/ws/ingest` | WS | Kare gönder → sonuç al |
+| `/ws/detections` | WS | Salt-okuma abone soketi |
+
+Tüm uç noktaları tarayıcıdan dene: [`http://localhost:8000/docs`](http://localhost:8000/docs)
+
+---
+
+## Sık Kullanılan Komutlar
+
+```bash
+./run_dev.sh          # Tam sistem başlat
+make test             # Tüm testleri çalıştır
+make eval             # Doğruluk raporu
+make mock             # Sentetik test videosu üret
+make clean            # venv + cache + db temizle
+
+# Sadece mock modda (YZ modeli olmadan):
+AI_MODE=mock .venv/bin/python -m uvicorn backend.main:app --reload
+```
+
+---
+
+Detaylı mimari: [`ARCHITECTURE.md`](ARCHITECTURE.md) · Kol rehberleri: [`docs/`](docs/)
