@@ -44,13 +44,32 @@ def _nms(bboxes: List[BBox], iou_thr: float = 0.4) -> List[BBox]:
     return kept
 
 
+def _region_brightness(frame: np.ndarray, rx: int, ry: int, rw: int, rh: int) -> float:
+    """Bölgenin ortalama parlaklığını döner."""
+    try:
+        import cv2
+        h, w = frame.shape[:2]
+        x1, y1 = max(0, rx), max(0, ry)
+        x2, y2 = min(w, rx + rw), min(h, ry + rh)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return 0.0
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        return float(gray.mean())
+    except Exception:
+        return 0.0
+
+
 def _detect_cv(frame: np.ndarray) -> List[BBox]:
     """
-    OpenCV tabanlı plaka aday tespiti.
-    Türk plakası: beyaz/açık zemin, ~4.7:1 en-boy oranı, 30–110 mm yükseklik.
-    İki teknik uygulanır ve birleştirilir:
-    (a) Kenar + kontur yöntemi
-    (b) Beyaz dikdörtgen bölge yöntemi (Türk plakaları için)
+    OpenCV tabanlı plaka aday tespiti — CLAHE ön işlemli, lokal kontrast tabanlı.
+
+    Sorun: Yeraltı otoparkı gibi düşük ışıklı sahnelerde ham piksel değerleri
+    20-30 aralığında kalır; sabit parlıklık eşiği (>140) hiçbir aday bulamaz.
+
+    Çözüm: CLAHE (Contrast Limited Adaptive Histogram Equalization) uygulanır.
+    CLAHE her yerel bölgede kontrastı 0-255'e normalize eder — beyaz plaka,
+    koyu araç gövdesine karşı belirgin hale gelir (mutlak parlaklıktan bağımsız).
     """
     try:
         import cv2
@@ -58,46 +77,63 @@ def _detect_cv(frame: np.ndarray) -> List[BBox]:
         return []
 
     h, w = frame.shape[:2]
-    min_area = w * h * 0.001   # kare boyutunun %0.1'i
-    max_area = w * h * 0.15    # kare boyutunun %15'i
+    min_area = w * h * 0.0003
+    max_area = w * h * 0.08
     candidates: List[BBox] = []
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame.copy()
 
-    # ── (a) Kenar + kontur ──────────────────────────────────────────────────
-    filtered = cv2.bilateralFilter(gray, 11, 17, 17)
-    edges = cv2.Canny(filtered, 25, 180)
-    cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    for c in cnts:
-        peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.018 * peri, True)
-        if len(approx) < 4:
-            continue
-        rx, ry, rw, rh = cv2.boundingRect(c)
+    # CLAHE: lokal kontrast güçlendirme (düşük ışık koşulları için kritik)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+
+    def _check(rx: int, ry: int, rw: int, rh: int) -> bool:
+        if rw < 40 or rh < 10:
+            return False
         area = rw * rh
-        if area < min_area or area > max_area or rh < 8:
-            continue
-        aspect = rw / rh
-        if 2.5 <= aspect <= 8.0:
-            candidates.append(BBox(x1=float(rx), y1=float(ry),
-                                   x2=float(rx + rw), y2=float(ry + rh)))
+        if not (min_area <= area <= max_area):
+            return False
+        if not (2.5 <= rw / rh <= 8.5):
+            return False
+        region = enhanced[max(0, ry):min(h, ry + rh), max(0, rx):min(w, rx + rw)]
+        return region.size > 0 and float(region.mean()) >= 120
 
-    # ── (b) Parlak dikdörtgen (Türk beyaz plaka) ────────────────────────────
-    _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (20, 5))
-    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-    cnts2, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # ── Yöntem 1: CLAHE görüntüsünde sabit eşik (birincil) ─────────────────
+    for thresh_val in [200, 180, 160, 140]:
+        _, binary = cv2.threshold(enhanced, thresh_val, 255, cv2.THRESH_BINARY)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 6))
+        closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+        cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in cnts:
+            rx, ry, rw, rh = cv2.boundingRect(c)
+            if _check(rx, ry, rw, rh):
+                candidates.append(BBox(x1=float(rx), y1=float(ry),
+                                       x2=float(rx + rw), y2=float(ry + rh)))
+
+    # ── Yöntem 2: Otsu adaptif eşik (ışık değişimine dayanıklı) ─────────────
+    _, otsu = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel2 = cv2.getStructuringElement(cv2.MORPH_RECT, (22, 5))
+    closed2 = cv2.morphologyEx(otsu, cv2.MORPH_CLOSE, kernel2)
+    cnts2, _ = cv2.findContours(closed2, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for c in cnts2:
         rx, ry, rw, rh = cv2.boundingRect(c)
-        area = rw * rh
-        if area < min_area or area > max_area or rh < 8:
-            continue
-        aspect = rw / rh
-        if 2.8 <= aspect <= 7.5:
+        if _check(rx, ry, rw, rh):
             candidates.append(BBox(x1=float(rx), y1=float(ry),
                                    x2=float(rx + rw), y2=float(ry + rh)))
 
-    return _nms(candidates)[:5]  # En fazla 5 aday döner
+    # ── Yöntem 3: Canny kenar + kontur (ikincil) ─────────────────────────────
+    blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
+    edges = cv2.Canny(blurred, 50, 150)
+    dil_k = cv2.getStructuringElement(cv2.MORPH_RECT, (18, 3))
+    dilated = cv2.dilate(edges, dil_k)
+    cnts3, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for c in cnts3:
+        rx, ry, rw, rh = cv2.boundingRect(c)
+        if _check(rx, ry, rw, rh):
+            candidates.append(BBox(x1=float(rx), y1=float(ry),
+                                   x2=float(rx + rw), y2=float(ry + rh)))
+
+    return _nms(candidates)[:5]
 
 
 class LicensePlateDetector:
