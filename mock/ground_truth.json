@@ -1,0 +1,1096 @@
+{
+  "w": 640,
+  "h": 360,
+  "frames": [
+    {
+      "vehicle_bbox": [
+        263,
+        76,
+        378,
+        140
+      ],
+      "plate_bbox": [
+        291,
+        132,
+        350,
+        138
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0319,
+      "frame": 0
+    },
+    {
+      "vehicle_bbox": [
+        263,
+        77,
+        383,
+        144
+      ],
+      "plate_bbox": [
+        293,
+        136,
+        353,
+        142
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0349,
+      "frame": 1
+    },
+    {
+      "vehicle_bbox": [
+        264,
+        77,
+        388,
+        147
+      ],
+      "plate_bbox": [
+        295,
+        139,
+        357,
+        145
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0377,
+      "frame": 2
+    },
+    {
+      "vehicle_bbox": [
+        265,
+        79,
+        394,
+        152
+      ],
+      "plate_bbox": [
+        297,
+        143,
+        362,
+        150
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0409,
+      "frame": 3
+    },
+    {
+      "vehicle_bbox": [
+        265,
+        80,
+        399,
+        155
+      ],
+      "plate_bbox": [
+        298,
+        146,
+        366,
+        153
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0436,
+      "frame": 4
+    },
+    {
+      "vehicle_bbox": [
+        266,
+        81,
+        405,
+        159
+      ],
+      "plate_bbox": [
+        300,
+        150,
+        371,
+        157
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0471,
+      "frame": 5
+    },
+    {
+      "vehicle_bbox": [
+        266,
+        82,
+        410,
+        163
+      ],
+      "plate_bbox": [
+        302,
+        153,
+        374,
+        161
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0506,
+      "frame": 6
+    },
+    {
+      "vehicle_bbox": [
+        266,
+        83,
+        415,
+        167
+      ],
+      "plate_bbox": [
+        303,
+        157,
+        378,
+        165
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0543,
+      "frame": 7
+    },
+    {
+      "vehicle_bbox": [
+        266,
+        84,
+        420,
+        170
+      ],
+      "plate_bbox": [
+        304,
+        160,
+        382,
+        168
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0575,
+      "frame": 8
+    },
+    {
+      "vehicle_bbox": [
+        266,
+        85,
+        425,
+        174
+      ],
+      "plate_bbox": [
+        305,
+        163,
+        386,
+        172
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0614,
+      "frame": 9
+    },
+    {
+      "vehicle_bbox": [
+        265,
+        86,
+        429,
+        178
+      ],
+      "plate_bbox": [
+        306,
+        167,
+        388,
+        176
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0655,
+      "frame": 10
+    },
+    {
+      "vehicle_bbox": [
+        264,
+        87,
+        432,
+        182
+      ],
+      "plate_bbox": [
+        306,
+        171,
+        390,
+        180
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0693,
+      "frame": 11
+    },
+    {
+      "vehicle_bbox": [
+        264,
+        89,
+        437,
+        186
+      ],
+      "plate_bbox": [
+        307,
+        174,
+        394,
+        184
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0728,
+      "frame": 12
+    },
+    {
+      "vehicle_bbox": [
+        262,
+        89,
+        440,
+        189
+      ],
+      "plate_bbox": [
+        306,
+        177,
+        396,
+        187
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0773,
+      "frame": 13
+    },
+    {
+      "vehicle_bbox": [
+        260,
+        91,
+        443,
+        194
+      ],
+      "plate_bbox": [
+        305,
+        182,
+        398,
+        192
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0818,
+      "frame": 14
+    },
+    {
+      "vehicle_bbox": [
+        257,
+        92,
+        445,
+        197
+      ],
+      "plate_bbox": [
+        304,
+        184,
+        398,
+        195
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0857,
+      "frame": 15
+    },
+    {
+      "vehicle_bbox": [
+        255,
+        93,
+        448,
+        201
+      ],
+      "plate_bbox": [
+        303,
+        188,
+        400,
+        199
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0905,
+      "frame": 16
+    },
+    {
+      "vehicle_bbox": [
+        252,
+        94,
+        450,
+        205
+      ],
+      "plate_bbox": [
+        301,
+        192,
+        401,
+        203
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.0954,
+      "frame": 17
+    },
+    {
+      "vehicle_bbox": [
+        249,
+        94,
+        452,
+        208
+      ],
+      "plate_bbox": [
+        299,
+        194,
+        402,
+        206
+      ],
+      "phone_bbox": [
+        316,
+        132,
+        336,
+        146
+      ],
+      "area_ratio": 0.1004,
+      "frame": 18
+    },
+    {
+      "vehicle_bbox": [
+        246,
+        96,
+        453,
+        212
+      ],
+      "plate_bbox": [
+        297,
+        198,
+        402,
+        210
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.1042,
+      "frame": 19
+    },
+    {
+      "vehicle_bbox": [
+        242,
+        97,
+        454,
+        216
+      ],
+      "plate_bbox": [
+        295,
+        202,
+        401,
+        214
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.1095,
+      "frame": 20
+    },
+    {
+      "vehicle_bbox": [
+        239,
+        98,
+        456,
+        220
+      ],
+      "plate_bbox": [
+        293,
+        205,
+        402,
+        218
+      ],
+      "phone_bbox": [
+        311,
+        138,
+        332,
+        153
+      ],
+      "area_ratio": 0.1149,
+      "frame": 21
+    },
+    {
+      "vehicle_bbox": [
+        234,
+        99,
+        456,
+        224
+      ],
+      "plate_bbox": [
+        289,
+        209,
+        401,
+        222
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.1204,
+      "frame": 22
+    },
+    {
+      "vehicle_bbox": [
+        230,
+        101,
+        457,
+        228
+      ],
+      "plate_bbox": [
+        286,
+        213,
+        401,
+        226
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.1251,
+      "frame": 23
+    },
+    {
+      "vehicle_bbox": [
+        224,
+        101,
+        456,
+        231
+      ],
+      "plate_bbox": [
+        282,
+        215,
+        398,
+        229
+      ],
+      "phone_bbox": [
+        301,
+        144,
+        324,
+        160
+      ],
+      "area_ratio": 0.1309,
+      "frame": 24
+    },
+    {
+      "vehicle_bbox": [
+        220,
+        103,
+        457,
+        236
+      ],
+      "plate_bbox": [
+        279,
+        220,
+        398,
+        234
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.1368,
+      "frame": 25
+    },
+    {
+      "vehicle_bbox": [
+        214,
+        103,
+        456,
+        239
+      ],
+      "plate_bbox": [
+        274,
+        222,
+        396,
+        237
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.1428,
+      "frame": 26
+    },
+    {
+      "vehicle_bbox": [
+        209,
+        104,
+        455,
+        242
+      ],
+      "plate_bbox": [
+        270,
+        225,
+        394,
+        240
+      ],
+      "phone_bbox": [
+        291,
+        150,
+        315,
+        167
+      ],
+      "area_ratio": 0.1473,
+      "frame": 27
+    },
+    {
+      "vehicle_bbox": [
+        204,
+        106,
+        455,
+        247
+      ],
+      "plate_bbox": [
+        266,
+        230,
+        393,
+        245
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.1536,
+      "frame": 28
+    },
+    {
+      "vehicle_bbox": [
+        198,
+        106,
+        454,
+        250
+      ],
+      "plate_bbox": [
+        262,
+        232,
+        390,
+        248
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.16,
+      "frame": 29
+    },
+    {
+      "vehicle_bbox": [
+        192,
+        108,
+        453,
+        255
+      ],
+      "plate_bbox": [
+        257,
+        237,
+        388,
+        253
+      ],
+      "phone_bbox": [
+        279,
+        157,
+        305,
+        175
+      ],
+      "area_ratio": 0.1665,
+      "frame": 30
+    },
+    {
+      "vehicle_bbox": [
+        186,
+        109,
+        452,
+        258
+      ],
+      "plate_bbox": [
+        252,
+        240,
+        386,
+        256
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.172,
+      "frame": 31
+    },
+    {
+      "vehicle_bbox": [
+        181,
+        110,
+        452,
+        262
+      ],
+      "plate_bbox": [
+        248,
+        243,
+        385,
+        260
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.1788,
+      "frame": 32
+    },
+    {
+      "vehicle_bbox": [
+        175,
+        111,
+        451,
+        266
+      ],
+      "plate_bbox": [
+        244,
+        247,
+        382,
+        264
+      ],
+      "phone_bbox": [
+        267,
+        162,
+        294,
+        181
+      ],
+      "area_ratio": 0.1857,
+      "frame": 33
+    },
+    {
+      "vehicle_bbox": [
+        170,
+        111,
+        451,
+        269
+      ],
+      "plate_bbox": [
+        240,
+        250,
+        381,
+        267
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.1927,
+      "frame": 34
+    },
+    {
+      "vehicle_bbox": [
+        164,
+        113,
+        450,
+        273
+      ],
+      "plate_bbox": [
+        235,
+        253,
+        379,
+        271
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.1986,
+      "frame": 35
+    },
+    {
+      "vehicle_bbox": [
+        159,
+        114,
+        449,
+        277
+      ],
+      "plate_bbox": [
+        231,
+        257,
+        377,
+        275
+      ],
+      "phone_bbox": [
+        255,
+        168,
+        284,
+        188
+      ],
+      "area_ratio": 0.2052,
+      "frame": 36
+    },
+    {
+      "vehicle_bbox": [
+        154,
+        115,
+        449,
+        281
+      ],
+      "plate_bbox": [
+        227,
+        261,
+        376,
+        279
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.2125,
+      "frame": 37
+    },
+    {
+      "vehicle_bbox": [
+        148,
+        116,
+        448,
+        285
+      ],
+      "plate_bbox": [
+        223,
+        264,
+        373,
+        283
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.2201,
+      "frame": 38
+    },
+    {
+      "vehicle_bbox": [
+        144,
+        118,
+        449,
+        289
+      ],
+      "plate_bbox": [
+        220,
+        268,
+        373,
+        287
+      ],
+      "phone_bbox": [
+        245,
+        175,
+        275,
+        196
+      ],
+      "area_ratio": 0.2264,
+      "frame": 39
+    },
+    {
+      "vehicle_bbox": [
+        139,
+        118,
+        449,
+        292
+      ],
+      "plate_bbox": [
+        216,
+        271,
+        372,
+        290
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.2341,
+      "frame": 40
+    },
+    {
+      "vehicle_bbox": [
+        135,
+        120,
+        450,
+        297
+      ],
+      "plate_bbox": [
+        213,
+        275,
+        372,
+        295
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.242,
+      "frame": 41
+    },
+    {
+      "vehicle_bbox": [
+        131,
+        120,
+        451,
+        300
+      ],
+      "plate_bbox": [
+        211,
+        278,
+        371,
+        298
+      ],
+      "phone_bbox": [
+        237,
+        180,
+        269,
+        202
+      ],
+      "area_ratio": 0.25,
+      "frame": 42
+    },
+    {
+      "vehicle_bbox": [
+        127,
+        121,
+        452,
+        303
+      ],
+      "plate_bbox": [
+        208,
+        281,
+        371,
+        301
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.2567,
+      "frame": 43
+    },
+    {
+      "vehicle_bbox": [
+        124,
+        123,
+        453,
+        308
+      ],
+      "plate_bbox": [
+        206,
+        285,
+        371,
+        306
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.2642,
+      "frame": 44
+    },
+    {
+      "vehicle_bbox": [
+        121,
+        123,
+        455,
+        311
+      ],
+      "plate_bbox": [
+        204,
+        288,
+        372,
+        309
+      ],
+      "phone_bbox": [
+        232,
+        185,
+        265,
+        208
+      ],
+      "area_ratio": 0.2725,
+      "frame": 45
+    },
+    {
+      "vehicle_bbox": [
+        119,
+        125,
+        458,
+        316
+      ],
+      "plate_bbox": [
+        203,
+        293,
+        374,
+        314
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.281,
+      "frame": 46
+    },
+    {
+      "vehicle_bbox": [
+        116,
+        126,
+        460,
+        319
+      ],
+      "plate_bbox": [
+        202,
+        295,
+        374,
+        317
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.2882,
+      "frame": 47
+    },
+    {
+      "vehicle_bbox": [
+        114,
+        127,
+        463,
+        323
+      ],
+      "plate_bbox": [
+        201,
+        299,
+        376,
+        321
+      ],
+      "phone_bbox": [
+        230,
+        192,
+        264,
+        216
+      ],
+      "area_ratio": 0.2969,
+      "frame": 48
+    },
+    {
+      "vehicle_bbox": [
+        112,
+        128,
+        466,
+        327
+      ],
+      "plate_bbox": [
+        200,
+        303,
+        378,
+        325
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.3058,
+      "frame": 49
+    },
+    {
+      "vehicle_bbox": [
+        111,
+        129,
+        470,
+        331
+      ],
+      "plate_bbox": [
+        200,
+        306,
+        381,
+        329
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.3147,
+      "frame": 50
+    },
+    {
+      "vehicle_bbox": [
+        109,
+        130,
+        473,
+        334
+      ],
+      "plate_bbox": [
+        200,
+        309,
+        382,
+        332
+      ],
+      "phone_bbox": [
+        230,
+        198,
+        266,
+        223
+      ],
+      "area_ratio": 0.3223,
+      "frame": 51
+    },
+    {
+      "vehicle_bbox": [
+        109,
+        131,
+        478,
+        338
+      ],
+      "plate_bbox": [
+        201,
+        313,
+        386,
+        336
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.3315,
+      "frame": 52
+    },
+    {
+      "vehicle_bbox": [
+        109,
+        132,
+        482,
+        342
+      ],
+      "plate_bbox": [
+        202,
+        316,
+        389,
+        340
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.34,
+      "frame": 53
+    },
+    {
+      "vehicle_bbox": [
+        108,
+        133,
+        486,
+        346
+      ],
+      "plate_bbox": [
+        202,
+        320,
+        392,
+        344
+      ],
+      "phone_bbox": [
+        234,
+        204,
+        271,
+        230
+      ],
+      "area_ratio": 0.3495,
+      "frame": 54
+    },
+    {
+      "vehicle_bbox": [
+        108,
+        135,
+        491,
+        350
+      ],
+      "plate_bbox": [
+        203,
+        324,
+        396,
+        348
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.3574,
+      "frame": 55
+    },
+    {
+      "vehicle_bbox": [
+        108,
+        135,
+        496,
+        353
+      ],
+      "plate_bbox": [
+        205,
+        326,
+        399,
+        351
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.3671,
+      "frame": 56
+    },
+    {
+      "vehicle_bbox": [
+        109,
+        137,
+        502,
+        358
+      ],
+      "plate_bbox": [
+        207,
+        331,
+        404,
+        356
+      ],
+      "phone_bbox": [
+        240,
+        210,
+        279,
+        237
+      ],
+      "area_ratio": 0.377,
+      "frame": 57
+    },
+    {
+      "vehicle_bbox": [
+        108,
+        137,
+        506,
+        360
+      ],
+      "plate_bbox": [
+        207,
+        332,
+        407,
+        358
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.3869,
+      "frame": 58
+    },
+    {
+      "vehicle_bbox": [
+        110,
+        138,
+        513,
+        360
+      ],
+      "plate_bbox": [
+        210,
+        332,
+        413,
+        358
+      ],
+      "phone_bbox": null,
+      "area_ratio": 0.3953,
+      "frame": 59
+    }
+  ]
+}

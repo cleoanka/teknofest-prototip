@@ -1,0 +1,29 @@
+# Ultralytics YOLO veri kümesi yapılandırması — fine-tuning için.
+# Komite TOGG/etiketli veriyi paylaşınca yalnızca yollar ve (gerekirse) sınıflar
+# güncellenir. Sınıflar config/settings.py:TARGET_CLASSES ile birebir aynıdır.
+#
+# Beklenen klasör yapısı (YOLO formatı):
+#   datasets/yolguvenligi/
+#     images/train/*.jpg   labels/train/*.txt
+#     images/val/*.jpg     labels/val/*.txt
+#     images/test/*.jpg    labels/test/*.txt
+# Her .txt satırı:  <class_id> <x_center> <y_center> <w> <h>   (0-1 normalize)
+
+path: ../../datasets/yolguvenligi
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: vehicle
+  1: license_plate
+  2: person
+  3: phone
+  4: cigarette
+  5: seatbelt
+  6: headphone
+
+# Açık kaynak köprüsü (transkript: açık kaynak veri kullanımı serbest):
+#  - vehicle/person/phone  -> COCO + BDD100K alt kümeleri
+#  - license_plate         -> CCPD / OpenALPR / TR-plaka setleri
+#  - cigarette/seatbelt/headphone -> küçük özel etiketleme + augmentation

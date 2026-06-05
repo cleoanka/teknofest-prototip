@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Akıllı Yol Güvenliği",
+    "slug": "yol-guvenligi-mobil",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": { "backgroundColor": "#0b1020" },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Canlı yol güvenliği analizi için kamera erişimi gereklidir."
+      }
+    },
+    "android": {
+      "permissions": ["CAMERA"]
+    },
+    "plugins": [
+      ["expo-camera", { "cameraPermission": "Canlı analiz için kamera erişimi." }]
+    ]
+  }
+}
