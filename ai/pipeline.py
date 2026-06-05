@@ -162,6 +162,10 @@ class Pipeline:
             if plate_bboxes:
                 if vehicle.bbox:
                     selected_plate_bbox = _nearest_plate_to_vehicle(vehicle.bbox, plate_bboxes)
+                    if selected_plate_bbox is None:
+                        # TOGG gibi durum: COCO yanlış araç bbox'ı veriyor,
+                        # LP dedektör gerçek plaka konumunu buluyor → plakayı yine de kullan
+                        selected_plate_bbox = max(plate_bboxes, key=lambda b: b.area)
                 else:
                     # Araç yoksa en büyük plakayı al
                     selected_plate_bbox = max(plate_bboxes, key=lambda b: b.area)

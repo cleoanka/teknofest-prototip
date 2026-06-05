@@ -54,20 +54,32 @@ class Track:
             return 0.0
         return (cur - prev) / prev
 
-    def is_swerving(self, min_frames: int = 10, min_direction_changes: int = 2) -> bool:
-        """Araç sağ-sol-sağ / sol-sağ-sol zigzag yaparsa True döner (swerving tespiti)."""
+    def is_swerving(self, min_frames: int = 10, min_direction_changes: int = 2,
+                    rapid_lateral_px: float = 350.0) -> bool:
+        """
+        Araç swerving yapıyor mu?
+        İki kriter:
+        1. Zigzag: son N karede en az 2 sol↔sağ yön değişimi
+        2. Hızlı yanal hareket: son 15 karede >350px (1080p varsayımı) lateral kayma
+        """
         if len(self.center_history) < min_frames:
             return False
         xs = [c[0] for c in self.center_history]
-        x_range = max(xs) - min(xs) if xs else 0
-        if x_range < 15:  # 15 pikselden az hareket → gürültü
+
+        # Kriter 2: hızlı yanal yer değiştirme (şerit değişimi / manevra)
+        recent = xs[-15:] if len(xs) >= 15 else xs
+        if (max(recent) - min(recent)) > rapid_lateral_px:
+            return True
+
+        x_range = max(xs) - min(xs)
+        if x_range < 15:
             return False
-        # 3-kare hareketli ortalama ile gürültüyü azalt
+
+        # Kriter 1: zigzag (yön değişim sayımı)
         smoothed = []
         for i in range(len(xs)):
             window = xs[max(0, i - 2): i + 1]
             smoothed.append(sum(window) / len(window))
-        # Yön değişikliği say
         direction = 0
         changes = 0
         for i in range(1, len(smoothed)):
