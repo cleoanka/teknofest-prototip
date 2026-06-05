@@ -24,6 +24,9 @@ PERCLOS_FATIGUE = 0.40    # %40 üstü -> yorgun
 # MediaPipe Face Mesh göz landmark indeksleri
 _LEFT_EYE = [33, 160, 158, 133, 153, 144]
 _RIGHT_EYE = [362, 385, 387, 263, 373, 380]
+# Ağız bölgesi (üst dudak üstü = 13, alt dudak altı = 14)
+_MOUTH_UPPER = 13
+_MOUTH_LOWER = 14
 
 
 def _ear(pts) -> float:
@@ -59,6 +62,75 @@ class DriverMonitor:
             return "real"
         except Exception:
             return "mock"
+
+    def _detect_smoking_heuristic(self, frame: np.ndarray, driver_roi: Optional[BBox]) -> bool:
+        """
+        El-ağız yakınlık tespiti (sigara içme heuristic).
+
+        Kural: Sürücü ROI içinde yüz tespit edilirse, ağız landmark'ının
+        20 piksel yakınında küçük parlak/beyaz piksel yoğunluğu varsa → sigara
+        şüphesi. COCO'da sigara sınıfı olmadığı için CV tabanlı yedek yöntem.
+        """
+        if self._mesh is None or frame is None or frame.size == 0:
+            return False
+        try:
+            import cv2
+            # Sürücü ROI crop
+            if driver_roi:
+                h, w = frame.shape[:2]
+                x1 = max(0, int(driver_roi.x1)); y1 = max(0, int(driver_roi.y1))
+                x2 = min(w, int(driver_roi.x2)); y2 = min(h, int(driver_roi.y2))
+                roi = frame[y1:y2, x1:x2]
+            else:
+                roi = frame
+                x1, y1 = 0, 0
+
+            if roi.size == 0:
+                return False
+
+            rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            res = self._mesh.process(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+            if not res.multi_face_landmarks:
+                return False
+
+            lm = res.multi_face_landmarks[0].landmark
+            rh, rw = roi.shape[:2]
+
+            # Ağız koordinatı (piksel)
+            mx = int(lm[_MOUTH_UPPER].x * rw)
+            my = int(lm[_MOUTH_UPPER].y * rh)
+
+            # Ağızın üstünde küçük bölge: sigara genellikle dudaktan dışarı uzanır
+            # Ağız merkezinin 60px üstünde 80x20px pencere tara
+            sig_y1 = max(0, my - 80)
+            sig_y2 = max(0, my - 10)
+            sig_x1 = max(0, mx - 40)
+            sig_x2 = min(rw, mx + 40)
+
+            if sig_y1 >= sig_y2 or sig_x1 >= sig_x2:
+                return False
+
+            region = rgb[sig_y1:sig_y2, sig_x1:sig_x2]
+            if region.size == 0:
+                return False
+
+            # CLAHE ile kontrastı artır, beyaz/gri ince nesne ara
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
+            enh = clahe.apply(region)
+            _, thresh = cv2.threshold(enh, 180, 255, cv2.THRESH_BINARY)
+
+            # İnce yatay nesne: genişlik >> yükseklik (sigara oranı ~10:1)
+            cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for c in cnts:
+                rx, ry, rw2, rh2 = cv2.boundingRect(c)
+                if rw2 < 8 or rh2 < 2:
+                    continue
+                ar = rw2 / max(rh2, 1)
+                if ar >= 3.0 and rw2 * rh2 > 20:
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _fatigue_real(self, frame: np.ndarray, driver_roi: Optional[BBox]) -> Tuple[Optional[float], Optional[float], bool]:
         try:
@@ -190,5 +262,9 @@ class DriverMonitor:
 
             # COCO'da emniyet kemeri sınıfı yok; fine-tune gelene kadar devre dışı
             state.no_seatbelt = False
+
+        # Sigara içme heuristic (COCO sigara sınıfı yok → CV yedek)
+        if not state.smoking and self.mode == "real" and profile == "critical":
+            state.smoking = self._detect_smoking_heuristic(frame, droi)
 
         return state

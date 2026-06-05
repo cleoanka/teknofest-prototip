@@ -16,7 +16,8 @@ pillow==11.0.0
 # ── İsteğe bağlı (gerçek model çıkarımı). Yoksa sistem MOCK moda düşer. ──
 # Mac (Apple Silicon) için: torch MPS hızlandırması otomatik kullanılır.
 ultralytics==8.3.55        # YOLOv8/v11 — araç + araç içi nesne tespiti
-easyocr==1.7.2             # Plaka OCR (PaddleOCR alternatifi, kurulumu kolay)
+easyocr==1.7.2             # Plaka OCR birincil
+pytesseract>=0.3.10        # Tesseract yedek OCR (brew install tesseract gerekir)
 mediapipe==0.10.35         # Yüz mesh -> EAR/PERCLOS yorgunluk
 huggingface_hub>=0.20.0    # keremberke/yolov8n-license-plate-detection indirme
 
