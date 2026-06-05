@@ -8,17 +8,20 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 
 ---
 
-## 1. Mevcut Durum (2026-06-05)
+## 1. Mevcut Durum (son güncelleme: 2026-06-06)
 
 **Genel:**
-- Prototip repo **temel alındı** ve çalışma klasörüne byte-perfect kuruldu (64 dosya, GitHub ile birebir).
-- YZ hattı **uçtan uca çalışıyor** (mock + COCO ön-eğitimli YOLOv8 ile).
-- Derin **kod incelemesi yapıldı** (aşağıdaki riskler buradan çıktı).
+- Prototip repo **temel alındı**; uzak `cleoanka/teknofest-prototip` ile senkron (K7 akışı).
+- YZ hattı **uçtan uca çalışıyor**: mock (73 test yeşil) **ve** gerçek GPU (CUDA torch + YOLOv8) doğrulandı.
+- Eğitim/veri hattı **kodlandı ve test edildi** (aşağıdaki modüller).
 
 **Hazır olan YZ modülleri:**
 - `detector` (YOLOv8 gerçek/mock), `tracking` (IOU), `speed` (bbox-alan), `plate_ocr`
   (çok-varyant + konsensüs), `driver_state` (EAR/PERCLOS + ROI), `risk` (ağırlıklı),
-  `qod_trigger` (A–E motoru), `pipeline` (orkestratör), `schema` (kontrat), `training` (iskelet).
+  `qod_trigger` (A–E motoru), `pipeline` (orkestratör), `schema` (kontrat).
+- **Eğitim/veri araçları (6 Haz):** `training/prepare_dataset` (COCO→YOLO + audit + verify),
+  `training/train` (müfredat + iki kademe + export + dry-run), `training/fetch_data` (+ `sources.json`
+  manifest), `eval/real_smoke` (gerçek-mod duman). Detay: Faz Durumu ve §5.
 
 **Henüz YOK:**
 - Eğitilmiş özel model (sadece COCO-pretrained / mock).
@@ -124,20 +127,29 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 
 ## 5. Sıradaki Adımlar (kısa vade)
 
-0. **Git/GitHub kurulumu (K7):** klasörde repo başlat ve uzak depoya bağla; ilk commit'i at.
-   ```
-   git init
-   git add .
-   git commit -m "chore: prototip temel + YZ kolu dokümanları (ilk commit)"
-   git branch -M main
-   git remote add origin <GitHub-repo-URL>
-   git push -u origin main
-   ```
-   Bundan sonra her adım K7 sırasına göre commit + push edilir.
-1. Windows'ta backend'i ayağa kaldır (venv + `uvicorn backend.main:app`), `http://localhost:8000/api/health` 200 mü?
-2. `make test` (veya `python -m pytest`) → gerçek test durumunu gör, R3'ü teyit et.
-3. `AI_MODE=real` + ultralytics/torch (CUDA 11.8) → 3 test videosunda araç tespiti + FPS.
-4. Plaka OCR'ı gerçek EasyOCR ile dene; eski projedeki "34 TC 8532" birikimini taşı.
+### ✅ Tamamlanan (6 Haziran 2026 oturumu)
+- Git/GitHub kurulumu + K7 iş akışı (uzak: `cleoanka/teknofest-prototip`, daima fetch+rebase).
+- **Veri hazırlama araçları** (`prepare_dataset.py`): COCO→YOLO, audit, data.yaml↔TARGET_CLASSES.
+- **Eğitim hattı** (`train.py`): aşamalı müfredat + iki kademe (n/s) + INT8 export + `--dry-run`.
+- **Veri indirme** (`fetch_data.py` + `sources.json`): manifest + kapsama/lisans doğrulama.
+- **Faz 2/3:** CUDA torch+ultralytics kuruldu, gerçek GPU eğitimi (coco8, yolov8n **72.7 FPS**).
+- **Gerçek-mod pipeline dumanı** (`eval/real_smoke.py`): `AI_MODE=real` çökmeden çalışıyor, K4 fallback geçerli.
+- Test: **73 yeşil** (mock). Tüm adımlar atomik commit + push'landı.
+
+### ⏭️ YARIN devam (öncelik sırası)
+1. **Gerçek COCO alt-küme eğitimi (Faz 3 tam):** COCO'dan birkaç yüz `vehicle`/`person` indir
+   (`fetch_data` coco_json) → `prepare_dataset coco` ile bizim 7-sınıf formatına çevir → `audit` →
+   `train --tier critical --curriculum` ile ilk gerçek `best.pt` v0. Hedef: bizim sınıflarımızla çalışan model.
+2. **`eval/evaluate.py` — QoD %40 kanıtı (plan Bölüm 8):** Normal vs Kritik doğruluk farkı + `bandwidth_efficiency`
+   raporu. Yarışmanın **en ağırlıklı** kriteri; sayısal kanıt üretmeli.
+3. **Faz 4 — Gerçek plaka OCR:** `pip install easyocr` (GPU) → gerçek-mod dumanında plate artık gerçek;
+   eski projedeki "34 TC 8532" birikimini taşı. (Opsiyonel: `huggingface_hub` ile lp_detector, bkz. R7.)
+
+### 🔧 Açık/temizlik
+- `stash@{0}` ("R6: sapmış eski çalışma ağacı") hâlâ duruyor — büyük olasılıkla **atılacak** (`git stash drop`),
+  uzak zaten ileride. Atmadan önce `git stash show -p stash@{0}` ile son bir göz at.
+- `ayrıntılıanlatım.md` (untracked, yeni) — istenirse ayrı commit'lenecek.
+- Ortam: gerçek-mod için `.venv`'de CUDA torch + ultralytics kurulu (mediapipe/easyocr **yok** → o modüller mock).
 
 ---
 
