@@ -212,11 +212,17 @@ def resolve_device(device: str) -> str:
 
 
 def run_stage(stage: Stage) -> str:
-    """Tek aşamayı eğitir ve test bölmesinde değerlendirir. best.pt yolunu döner."""
+    """Tek aşamayı eğitir ve değerlendirir. best.pt yolunu döner."""
     from ultralytics import YOLO
     model = YOLO(stage.base)
     model.train(**stage.train_kwargs())
-    metrics = model.val(data=stage.data, device=stage.device, split="test")
+    # Tercihen 'test' bölmesinde değerlendir; bazı veri setlerinde (ör. coco8) test
+    # bölmesi yok → 'val'e nazikçe düş (eğitim yine de tamamlanmış sayılır).
+    try:
+        metrics = model.val(data=stage.data, device=stage.device, split="test")
+    except Exception:
+        print(f"[{stage.name}] test bölmesi yok → val ile değerlendiriliyor")
+        metrics = model.val(data=stage.data, device=stage.device, split="val")
     print(f"[{stage.name}] mAP50:", getattr(metrics.box, "map50", None),
           "mAP50-95:", getattr(metrics.box, "map", None))
     return stage.best_path()

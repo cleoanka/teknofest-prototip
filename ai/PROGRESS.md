@@ -24,7 +24,7 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 - Eğitilmiş özel model (sadece COCO-pretrained / mock).
 - Gerçek CAMARA 5G (mock).
 - Saha hız kalibrasyonu.
-- Windows/CUDA üzerinde doğrulanmış çalıştırma.
+- ~~Windows/CUDA üzerinde doğrulanmış çalıştırma~~ → **YAPILDI** (2026-06-06, bkz. Faz 2/3).
 
 ---
 
@@ -32,8 +32,11 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 
 - **Faz 0 — Prototip temel alındı** ✓ (2026-06-05)
 - **Faz 1 — Mimari + derin kod incelemesi** ✓ (2026-06-05)
-- **Faz 2 — Windows/CUDA çalıştırma doğrulaması** → BEKLEYEN
-- **Faz 3 — Gerçek YOLOv8 (4060) + 3 test videosu ölçümü** → BEKLEYEN
+- **Faz 2 — Windows/CUDA çalıştırma doğrulaması** ✓ (2026-06-06) — venv'e torch 2.6.0+cu124 + ultralytics
+  8.4.60 kuruldu; `torch.cuda.is_available()=True`, **RTX 4070 Laptop (8GB)** görülüyor; mock paketi 73 yeşil.
+- **Faz 3 — Gerçek YOLOv8 + FPS ölçümü** ✓ MİNİ (2026-06-06) — coco8 ile **gerçek GPU eğitimi `train.py`
+  üzerinden uçtan uca koştu** (3 epoch, best.pt üretildi, test→val geri-düşüşü çalıştı). **yolov8n: 72.7 FPS**
+  (RTX 4070, imgsz 640) → plan hedefi "Normal mod >25 FPS" ✓. 3 saha/test videosuyla ölçüm → BEKLEYEN (veri gelince).
 - **Faz 4 — Plaka OCR gerçek (EasyOCR + GPU)** → BEKLEYEN
 - **Faz 5 — Sürücü davranışı (telefon gerçek + yorgunluk denemesi)** → BEKLEYEN
 - **Faz 6 — Hız kalibrasyonu** → BEKLEYEN
@@ -87,9 +90,11 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 
 ## 4. Açık Konular / Riskler (derin kod incelemesinden)
 
-- **R1 — Platform:** Repo macOS varsayıyor (`run_dev.sh` → `ipconfig getifaddr en0`, MPS, iPhone/Expo).
-  Bizim kurulum **Windows + NVIDIA 4060**. Backend çalışır ama `run_dev.sh` doğrudan çalışmaz; venv yolu
-  `.venv\Scripts`, gerçek modda cihaz **CUDA** olmalı (`detector._resolve_device` CUDA'yı zaten görüyor).
+- **R1 — Platform (büyük ölçüde çözüldü, 2026-06-06):** Repo macOS varsayıyor (`run_dev.sh` → MPS, iPhone/Expo).
+  Bizim kurulum **Windows + NVIDIA RTX 4070 Laptop (8GB)** (plan "4060" diyordu; gerçek donanım 4070). venv
+  yolu `.venv\Scripts`; gerçek modda CUDA doğrulandı (torch 2.6.0+cu124, `cuda.is_available()=True`). Eğitim
+  ve çıkarım GPU'da koşuyor (Faz 2/3). `run_dev.sh` (bash) hâlâ Windows'ta doğrudan çalışmaz — PowerShell
+  betiği (`run_dev.ps1`) takım tarafında mevcut.
 - **R2 — Eğitilmiş model yok:** `cigarette/seatbelt/headphone` COCO'da yok → `driver_state` bu davranışları
   fine-tune'a kadar **üretemez** (kemer kontrolü kodda kasıtlı kapalı). Sigara/kemer demoda çalışmaz.
 - **R3 — Olası kırık test:** `tests/test_pipeline_schema.py::test_pipeline_reads_plate_in_critical` mock modda
