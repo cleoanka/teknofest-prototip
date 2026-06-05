@@ -106,6 +106,7 @@ class PlateReader:
     def __init__(self, mode: str = "auto", history: int = 8):
         self.mode = self._resolve(mode)
         self._reader = None
+        self._tesseract_ok = False
         self._history: deque = deque(maxlen=history)
         if self.mode == "real":
             self._init_reader()
@@ -114,11 +115,18 @@ class PlateReader:
         try:
             import easyocr
             # Türk plakası yalnızca A-Z + 0-9 kullanır → "en" modeli yeterli
-            # "tr" eklemek latin_g2.pth (~65MB) indirir, gereksiz
             self._reader = easyocr.Reader(["en"], gpu=False, verbose=False)
         except Exception as e:
             print(f"[PlateOCR] EasyOCR başlatılamadı: {e}")
             self.mode = "mock"
+        # Tesseract yedek (easyocr düşük güven durumunda devreye girer)
+        self._tesseract_ok = False
+        try:
+            import pytesseract as _pyt
+            _pyt.get_tesseract_version()
+            self._tesseract_ok = True
+        except Exception:
+            pass
 
     @staticmethod
     def _resolve(mode: str) -> str:
@@ -136,24 +144,49 @@ class PlateReader:
             return None, 0.0
 
         h, w = crop.shape[:2]
-        # Küçük plateler için süper çözünürlük (LP detector crop'u bile bazen 60-80px olur)
-        if w < 120:
+        # Süper çözünürlük: geniş crop'lar da dahil (video frame'den gelen plaka bölgesi)
+        if w < 200:
             crop = super_resolve(crop, scale=4)
-        elif w < 240:
+        elif w < 500:
             crop = super_resolve(crop, scale=2)
 
         best_text, best_conf = None, 0.0
         allowlist = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         for var in _variants(crop):
-            w_sharp = min(1.0, _laplacian_sharpness(var) / 300.0)
             try:
-                results = self._reader.readtext(var, allowlist=allowlist)
-                for _, text, conf in results:
-                    eff = conf * (0.6 + 0.4 * w_sharp)
-                    if eff > best_conf:
-                        best_text, best_conf = text, eff
+                results = self._reader.readtext(
+                    var, allowlist=allowlist,
+                    text_threshold=0.20, low_text=0.20, link_threshold=0.10,
+                ) if self._reader else []
+                if results:
+                    # Sol→sağ sırala ve birleştir ("34TC" + "8532" → "34TC8532")
+                    results_sorted = sorted(results, key=lambda r: r[0][0][0])
+                    combined = "".join(t for _, t, _ in results_sorted if t.strip())
+                    avg_conf = sum(c for _, _, c in results_sorted) / len(results_sorted)
+                    if avg_conf > best_conf:
+                        best_text, best_conf = combined, avg_conf
+                    for _, text, conf in results:
+                        if conf > best_conf:
+                            best_text, best_conf = text, conf
             except Exception:
                 pass
+
+        # Tesseract yedek: EasyOCR güveni düşükse veya sonuç yoksa dene
+        if self._tesseract_ok and (best_conf < 0.20 or best_text is None):
+            try:
+                import cv2
+                import pytesseract
+                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+                cfg = '--psm 7 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                t = pytesseract.image_to_string(gray, config=cfg).strip()
+                t = re.sub(r"[^A-Z0-9]", "", t.upper())
+                if len(t) >= 5:
+                    # Tesseract güven skoru doğrudan alınamıyor → sabit 0.20 ata
+                    if 0.20 > best_conf:
+                        best_text, best_conf = t, 0.20
+            except Exception:
+                pass
+
         return best_text, best_conf
 
     def read(self, crop: Optional[np.ndarray]) -> PlateResult:
@@ -173,8 +206,8 @@ class PlateReader:
         consensus = self._consensus()
         final = consensus or norm
 
-        # LP detector tarafından kesilmiş bölgede güven eşiği biraz daha düşük olabilir
-        if not (final and is_valid_tr_plate(final) and conf >= 0.30):
+        # Düşük eşik: video kalitesi düşük, karanlık ortam → konsensüs mekanizması kurtarır
+        if not (final and is_valid_tr_plate(final) and conf >= 0.12):
             return PlateResult()
 
         return PlateResult(text=final, confidence=round(conf, 3), valid_format=True)

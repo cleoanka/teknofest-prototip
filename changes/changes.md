@@ -1,9 +1,33 @@
 # YZ Sistemi Değişiklik Özeti
 
 **Son güncelleme:** 2026-06-05  
-**Versiyon:** 2.1 — OCR İyileştirmesi + CLAHE + EasyOCR Modelleri
+**Versiyon:** 2.2 — OCR Concat + Tesseract Yedek + Sigara Tespiti
 
 ---
+
+## Versiyon 2.2 Değişiklikleri (2026-06-05 — Bu Oturum)
+
+### Plaka OCR — Çok-Blok Birleştirme (`ai/plate_ocr.py`)
+- `_read_once()` yenilendi: EasyOCR birden fazla blok döndürdüğünde (ör. "14TC" + "8532") bunlar artık **sol→sağ sıraya göre birleştirilir** → "14TC8532". Önceden yalnızca tek en yüksek güvenli blok seçiliyordu.
+- Güven eşiği `0.30 → 0.12`: Karanlık otopark ortamında EasyOCR güveni düşük ama tutarlı; konsensüs mekanizması çok-kare oy çokluğuyla "34TC8532" formunu elde ediyor.
+- `super_resolve()` artık 500px altındaki tüm kırpmalar için çağrılıyor (sadece 120/240px altı değil).
+- EasyOCR parametreleri agresifleştirildi: `text_threshold=0.20`, `low_text=0.20`, `link_threshold=0.10`.
+
+### Tesseract Yedek OCR (`ai/plate_ocr.py`)
+- `pytesseract` eklendi; EasyOCR güveni < 0.20 ise `--psm 7` modunda tesseract devreye giriyor.
+- `requirements.txt`'e `pytesseract>=0.3.10` eklendi.
+- Kurulum notu: `brew install tesseract` gerekir.
+
+### Sigara Tespiti — El-Ağız Heuristic (`ai/driver_state.py`)
+- `_detect_smoking_heuristic()` metodu eklendi.
+- COCO'da `cigarette` sınıfı olmadığından CV tabanlı yaklaşım:
+  - MediaPipe Face Mesh ile ağız landmark'ı tespit edilir (landmark 13).
+  - Ağız üstü bölgede (60px × 80px pencere) CLAHE + threshold ile ince yatay nesne aranır.
+  - En-boy oranı ≥ 3:1 olan parlak nesne → "sigara şüphesi" → `state.smoking = True`.
+- video_2.mp4'te sürücü ROI içinde test edilmiştir.
+
+### Plaka Kırpma Genişletildi (`ai/pipeline.py`)
+- `_fallback_plate_crop()` yatay alan `%5-%95`'e genişletildi (önceden %15-%85). Plakada kenar karakterlerin kesilmesini önler.
 
 ## Versiyon 2.1 Değişiklikleri (2026-06-05 — Bu Oturum)
 
