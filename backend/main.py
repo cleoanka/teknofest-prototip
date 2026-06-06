@@ -248,6 +248,24 @@ async def events(
     return response
 
 
+@app.get("/api/events/summary", tags=["analytics"])
+@limiter.limit(f"{settings.rate_limit}/minute")
+async def events_summary_route(
+    request: Request,
+    hours: int = Query(default=24, ge=1, le=168, description="Son kaç saatin özeti (1–168)"),
+    _auth: Optional[dict] = Depends(require_auth),
+):
+    """
+    Saatlik olay dağılımı — dashboard grafikleri için.
+
+    Her saat için: olay sayısı, ortalama risk skoru, en yüksek risk skoru.
+    """
+    return {
+        "hours": hours,
+        "summary": state.store.hourly_summary(hours=hours),
+    }
+
+
 @app.get("/api/events/export", tags=["events"])
 @limiter.limit(f"{settings.rate_limit}/minute")
 async def events_export(
@@ -395,6 +413,42 @@ async def get_current_settings(request: Request):
             "calibration_k": s.speed_calibration_k,
         },
     }
+
+
+class SettingsPatch(BaseModel):
+    """PATCH /api/settings — runtime ayar güncellemesi. Sadece QoD eşikleri ve hız limiti."""
+    qod_bbox_growth_threshold: Optional[float] = None
+    qod_low_conf_threshold: Optional[float] = None
+    qod_ocr_conf_threshold: Optional[float] = None
+    qod_roi_line: Optional[float] = None
+    qod_ambiguous_low: Optional[float] = None
+    qod_ambiguous_high: Optional[float] = None
+    qod_release_conf: Optional[float] = None
+    qod_max_session_s: Optional[float] = None
+    qod_consecutive_required: Optional[int] = None
+    speed_limit_kmh: Optional[float] = None
+
+
+@app.patch("/api/settings", tags=["system"])
+@limiter.limit(f"{settings.rate_limit}/minute")
+async def patch_settings(request: Request, body: SettingsPatch):
+    """
+    QoD eşiklerini ve hız limitini çalışma zamanında güncelle — demo sırasında
+    jüri önünde sistemin hassasiyetini anlık değiştirmek için.
+
+    Sadece QoD parametreleri ve hız limiti runtime'da değiştirilebilir.
+    JWT / rate limit / DB değişiklikleri için sunucu yeniden başlatması gerekir.
+    """
+    s = state.settings
+    changed = {}
+    for field, value in body.model_dump(exclude_none=True).items():
+        if hasattr(s, field):
+            setattr(s, field, value)
+            changed[field] = value
+    if changed:
+        # QoDTriggerEngine de aynı settings referansını kullanıyor, anında etki
+        state.qod.engine.s = s
+    return {"updated": changed, "message": f"{len(changed)} ayar güncellendi"}
 
 
 @app.get("/.well-known/jwks.json", tags=["auth"])

@@ -152,6 +152,30 @@ class EventStore:
             "risk_breakdown": breakdown,
         }
 
+    def hourly_summary(self, hours: int = 24) -> list:
+        """Son N saatin saatlik olay dağılımı — grafik için."""
+        since = time.time() - hours * 3600
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT CAST((ts - ?) / 3600 AS INTEGER) as hour_offset,
+                          COUNT(*) as count,
+                          AVG(risk_score) as avg_score,
+                          MAX(risk_score) as max_score
+                   FROM events WHERE ts >= ?
+                   GROUP BY hour_offset
+                   ORDER BY hour_offset""",
+                (since, since),
+            ).fetchall()
+        return [
+            {
+                "hour_offset": r["hour_offset"],
+                "count": r["count"],
+                "avg_score": round(r["avg_score"], 1) if r["avg_score"] else 0,
+                "max_score": r["max_score"] or 0,
+            }
+            for r in rows
+        ]
+
     def count(self) -> int:
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()

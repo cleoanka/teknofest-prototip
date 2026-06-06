@@ -30,5 +30,9 @@ def jpeg_bytes(synthetic_frame):
 def client():
     from fastapi.testclient import TestClient
     from backend.main import app
+    from config.settings import get_settings
+    # Her test için settings cache'ini temizle — PATCH /api/settings test izolasyonu için
+    get_settings.cache_clear()
     with TestClient(app) as c:
         yield c
+    get_settings.cache_clear()
