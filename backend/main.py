@@ -3,10 +3,14 @@ FastAPI backend — REST + WebSocket + mock CAMARA 5G API'leri.
 
 v1.1: JWT RS256, rate limiting, statistics, filtering, Prometheus
 v1.2: JWT key persistence, /api/settings, WS /ws/status, X-Total-Count, plate validation
+v1.3: GZip, güvenlik başlıkları, X-Request-ID, qod/proof, offset pagination
+v1.4: WS token auth, /api/health/deep, JSON loglama, X-Response-Time, OpenAPI tags
 """
 import asyncio
 import io
 import csv
+import json
+import logging
 import os
 import re
 import time
@@ -46,6 +50,38 @@ from config.settings import get_settings
 settings = get_settings()
 limiter = Limiter(key_func=get_remote_address, default_limits=[f"{settings.rate_limit}/minute"])
 _start_time = time.time()
+
+# ── Yapılandırılmış JSON Loglama ──────────────────────────────────────────────
+
+class _JsonFormatter(logging.Formatter):
+    """Her log satırını tek JSON satırına dönüştürür — üretim ortamı için."""
+    def format(self, record: logging.LogRecord) -> str:
+        entry: dict = {
+            "ts": round(time.time(), 3),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            entry["exc"] = self.formatException(record.exc_info)
+        return json.dumps(entry, ensure_ascii=False)
+
+
+def _configure_json_logging() -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(_JsonFormatter())
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    # uvicorn access loglarını da JSON'a yönlendir
+    for name in ("uvicorn", "uvicorn.access", "uvicorn.error", "fastapi"):
+        lgr = logging.getLogger(name)
+        lgr.handlers = []
+        lgr.propagate = True
+
+
+logger = logging.getLogger("roadguard")
 
 
 class AppState:
@@ -91,10 +127,13 @@ state: Optional[AppState] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global state
+    _configure_json_logging()
     state = AppState()
+    logger.info("RoadGuard backend başlatıldı", extra={})
     yield
     if state:
         state.store.close()
+    logger.info("RoadGuard backend kapatıldı", extra={})
 
 
 _PLATE_RE = re.compile(r"^[0-9]{2}[A-Z][A-Z0-9]{0,2}[0-9]{2,5}$")
@@ -108,11 +147,37 @@ def _validate_plate(plate: str) -> str:
     return p
 
 
+_OPENAPI_TAGS = [
+    {"name": "system", "description": "Sağlık kontrolü, ayarlar, sistem durumu"},
+    {"name": "events", "description": "Riskli olay kaydı, sorgulama ve dışa aktarma"},
+    {"name": "vehicles", "description": "Plaka bazlı araç geçmişi"},
+    {"name": "analytics", "description": "İstatistik, saatlik özet, QoD kanıtı"},
+    {"name": "camara", "description": "CAMARA QoD + Number Verification — 5G API"},
+    {"name": "auth", "description": "JWT RS256 public key (JWKS)"},
+    {"name": "tools", "description": "Test video işleme"},
+]
+
 app = FastAPI(
     title="Akıllı Yol Güvenliği — 5G & YZ Backend",
-    version="1.3.0",
-    description="TEKNOFEST 2026 · CAMARA QoD + Number Verification + YZ Risk Motoru",
+    version="1.4.0",
+    description=(
+        "**TEKNOFEST 2026** · CAMARA QoD + Number Verification + YZ Risk Motoru\n\n"
+        "- JWT RS256 kimlik doğrulama (`/.well-known/jwks.json`)\n"
+        "- Rate limiting: 100 istek/dk (slowapi)\n"
+        "- CAMARA QoD dinamik bant yönetimi\n"
+        "- WebSocket: `/ws/ingest`, `/ws/detections`, `/ws/status`\n"
+        "- Prometheus metrikleri: `/metrics`\n\n"
+        "> `REQUIRE_AUTH=true` ile tüm `/api/*` endpoint'leri Bearer token ister."
+    ),
+    openapi_tags=_OPENAPI_TAGS,
     lifespan=lifespan,
+    swagger_ui_parameters={
+        "docExpansion": "list",
+        "defaultModelsExpandDepth": -1,
+        "tryItOutEnabled": True,
+        "filter": True,
+        "persistAuthorization": True,
+    },
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -122,10 +187,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.middleware("http")
 async def security_and_request_id(request: Request, call_next):
-    """Güvenlik headerleri + istek izleme X-Request-ID ekler."""
+    """Güvenlik headerleri + X-Request-ID + X-Response-Time ekler."""
+    t0 = time.perf_counter()
     req_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
     response = await call_next(request)
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
     response.headers["X-Request-ID"] = req_id
+    response.headers["X-Response-Time"] = f"{elapsed_ms}ms"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
@@ -227,6 +295,63 @@ async def health(request: Request):
         "event_count": state.store.count(),
         "ws_connections": len(state.subscribers),
     }
+
+
+@app.get("/api/health/deep", tags=["system"])
+@limiter.limit(f"{settings.rate_limit}/minute")
+async def health_deep(request: Request):
+    """
+    Derin sağlık kontrolü — DB, QoD ve bellek durumu.
+
+    `/api/health` anlık uptime dönerken bu endpoint her alt sistemi test eder.
+    CI/CD probe ve izleme sistemleri için uygundur.
+    """
+    checks: dict = {}
+
+    # DB bağlantısı
+    try:
+        count = state.store.count()
+        checks["db"] = {"status": "ok", "event_count": count, "path": state.store.path}
+    except Exception as exc:
+        checks["db"] = {"status": "error", "detail": str(exc)}
+
+    # QoD motoru
+    try:
+        qod_st = state.qod.status()
+        checks["qod"] = {
+            "status": "ok",
+            "mode": qod_st.mode,
+            "bandwidth_mbps": qod_st.bandwidth_mbps,
+            "cycles": state.qod._cycles,
+        }
+    except Exception as exc:
+        checks["qod"] = {"status": "error", "detail": str(exc)}
+
+    # Bellek (psutil varsa)
+    try:
+        import psutil
+        proc = psutil.Process()
+        mem = proc.memory_info()
+        checks["memory"] = {
+            "status": "ok",
+            "rss_mb": round(mem.rss / 1024 / 1024, 1),
+            "vms_mb": round(mem.vms / 1024 / 1024, 1),
+        }
+    except ImportError:
+        checks["memory"] = {"status": "unavailable", "detail": "psutil not installed"}
+    except Exception as exc:
+        checks["memory"] = {"status": "error", "detail": str(exc)}
+
+    all_ok = all(c["status"] in ("ok", "unavailable") for c in checks.values())
+    status_code = 200 if all_ok else 503
+    body = {
+        "status": "ok" if all_ok else "degraded",
+        "checks": checks,
+        "uptime_s": round(time.time() - _start_time, 1),
+        "version": app.version,
+        "ws_connections": len(state.subscribers),
+    }
+    return JSONResponse(content=body, status_code=status_code)
 
 
 @app.get("/api/qod/status", tags=["system"])
@@ -633,9 +758,25 @@ async def _process_frame(frame: np.ndarray, client_ts: Optional[float]) -> dict:
     return payload
 
 
+def _ws_auth_ok(token: Optional[str]) -> bool:
+    """WS bağlantısı için token doğrulama. require_auth=False ise her zaman True."""
+    s = get_settings()
+    if not s.require_auth:
+        return True
+    if not token:
+        return False
+    return get_jwt_manager().verify(token) is not None
+
+
 @app.websocket("/ws/ingest")
-async def ws_ingest(ws: WebSocket):
-    """Ön yüz canlı kare yollar; her kare işlenip sonuç aynı sokete dönülür."""
+async def ws_ingest(ws: WebSocket, token: Optional[str] = None):
+    """Ön yüz canlı kare yollar; her kare işlenip sonuç aynı sokete dönülür.
+
+    Auth aktifse `?token=<JWT>` query param ile bağlanın.
+    """
+    if not _ws_auth_ok(token):
+        await ws.close(code=4001)
+        return
     await ws.accept()
     ws_active_connections.labels(endpoint="ingest").inc()
     try:
@@ -656,8 +797,7 @@ async def ws_ingest(ws: WebSocket):
             elif msg.get("text") is not None:
                 txt = msg["text"]
                 if txt.startswith("{"):
-                    import json as _json
-                    obj = _json.loads(txt)
+                    obj = json.loads(txt)
                     frame = decode_data_url(obj.get("frame", ""))
                     client_ts = obj.get("client_ts")
                 else:
@@ -681,8 +821,14 @@ async def ws_ingest(ws: WebSocket):
 
 
 @app.websocket("/ws/detections")
-async def ws_detections(ws: WebSocket):
-    """Salt-okuma abone: işlenen her karenin sonucunu yayın olarak alır."""
+async def ws_detections(ws: WebSocket, token: Optional[str] = None):
+    """Salt-okuma abone: işlenen her karenin sonucunu yayın olarak alır.
+
+    Auth aktifse `?token=<JWT>` query param ile bağlanın.
+    """
+    if not _ws_auth_ok(token):
+        await ws.close(code=4001)
+        return
     await ws.accept()
     state.subscribers.add(ws)
     ws_active_connections.labels(endpoint="detections").inc()
@@ -697,14 +843,18 @@ async def ws_detections(ws: WebSocket):
 
 
 @app.websocket("/ws/status")
-async def ws_status(ws: WebSocket):
+async def ws_status(ws: WebSocket, token: Optional[str] = None):
     """
     Sistem durumu akışı — dashboard için 1 sn aralıkla QoD/event/bant bilgisi.
 
+    Auth aktifse `?token=<JWT>` query param ile bağlanın.
     İstemci bağlanır, sunucu her saniye JSON yayınlar:
       { ts, qod_mode, bandwidth_mbps, event_count, ws_connections,
-        bandwidth_efficiency, uptime_s, latency_ms }
+        bandwidth_efficiency, uptime_s }
     """
+    if not _ws_auth_ok(token):
+        await ws.close(code=4001)
+        return
     await ws.accept()
     ws_active_connections.labels(endpoint="status").inc()
     try:

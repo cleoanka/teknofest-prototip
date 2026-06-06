@@ -33,6 +33,12 @@
 | GZip middleware | ✅ | minimum_size=500 bayt, büyük yanıtlar otomatik sıkıştırılır |
 | Güvenlik başlıkları | ✅ | X-Content-Type-Options, X-Frame-Options, X-XSS-Protection |
 | X-Request-ID izleme | ✅ | İstemci başlığı yankılanır veya sunucu UUID üretir |
+| X-Response-Time header | ✅ | Her yanıtta milisaniye cinsinden yanıt süresi |
+| WS token auth (`?token=`) | ✅ | require_auth=True ile WS bağlantıları JWT doğrulama ister |
+| /api/health/deep | ✅ | DB, QoD, bellek alt sistem kontrolleri; 503 degraded modda |
+| JSON loglama | ✅ | `_JsonFormatter` — her log satırı tek JSON satırı; prod için |
+| OpenAPI tag açıklamaları | ✅ | system/events/vehicles/analytics/camara/auth/tools |
+| Swagger UI özelleştirme | ✅ | tryItOutEnabled, filter, persistAuthorization, tag gizleme |
 
 ---
 
@@ -92,7 +98,7 @@ Filtre parametrelerini destekliyor (from_ts, to_ts, level, vtype).
 ```
 Son çalıştırma: 2026-06-06
 Durum: TÜM TESTLER YEŞİL ✅
-Toplam test: 162 (73 eski → 162 yeni)
+Toplam test: 181 (73 eski → 181 yeni)
 Ortam: AI_MODE=mock, DB=:memory:
 ```
 
@@ -115,6 +121,7 @@ Ortam: AI_MODE=mock, DB=:memory:
 | test_speed.py | 4 | Hız tahmini |
 | test_statistics.py | 6 | /api/statistics doğruluğu |
 | test_training_*.py | 35 | Eğitim/veri araçları |
+| test_v14_features.py | 19 | health/deep, X-Response-Time, WS auth, OpenAPI, JSON log |
 | test_ws_e2e.py | 4 | WS ingest/detections/broadcast uçtan uca |
 
 ---
