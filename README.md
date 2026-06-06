@@ -340,4 +340,4 @@ python -m ai.training.train --tier critical --curriculum --dry-run
 - **İki kademe:** Normal modda `yolov8n` (hız), kritik modda `yolov8s` (doğruluk)
 - **Bant verimliliği:** Sürekli açık musluk değil, A–E koşul motoruyla ihtiyaç-bazlı QoD
 
-Detaylı mimari: [`ARCHITECTURE.md`](ARCHITECTURE.md) · Kol kuralları: [`ai/AGENTS.md`](ai/AGENTS.md)
+Detaylı mimari: [`ARCHITECTURE.md`](ARCHITECTURE.md) · Kol kuralları: [`/docs`](/docs)
