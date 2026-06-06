@@ -27,6 +27,7 @@ from ai.plate_ocr import PlateReader
 from ai.lp_detector import get_lp_detector
 from ai.driver_state import DriverMonitor
 from ai.speed import estimate_speed
+from ai.calibration import MetricSpeedEstimator
 from ai.risk import assess_risk
 from ai.qod_trigger import TriggerContext
 from config.settings import get_settings
@@ -92,6 +93,7 @@ class Pipeline:
         self.plate_reader = PlateReader(mode=self.s.ai_mode)
         self.driver = DriverMonitor(mode=self.s.ai_mode)
         self.lp_detector = get_lp_detector(mode=self.s.ai_mode)
+        self.speed_estimator = MetricSpeedEstimator(self.s)
         self._last_t = time.time()
         self._frame_id = 0
 
@@ -100,10 +102,18 @@ class Pipeline:
         return type(self.detector).__name__
 
     def process(self, frame: np.ndarray, critical: bool,
-                fps: float = 30.0) -> Tuple[FrameResult, TriggerContext]:
+                fps: float = 30.0,
+                frame_ts: Optional[float] = None) -> Tuple[FrameResult, TriggerContext]:
+        """frame_ts: bu karenin VİDEO ZAMAN ÇİZGİSİ damgası (s) — video PTS ya da
+        canlı akışta istemci yakalama zamanı (client_ts). Verilirse track'lere
+        yazılır ve metrik hız Δt'si bundan ölçülür (Aşama 0). Yoksa wall-clock'a
+        düşülür (canlı akışta kareler gerçek zamanlı geldiği için makul yaklaşım).
+        """
         t0 = time.time()
-        dt = max(1e-3, t0 - self._last_t)
+        dt = max(1e-3, t0 - self._last_t)   # işleme (perf) Δt'si — fps/latency raporu için
         self._last_t = t0
+        # Hız için video-zaman çizgisi damgası: PTS/client_ts varsa onu, yoksa wall-clock'u kullan
+        vts = frame_ts if (frame_ts is not None and frame_ts > 0) else t0
         self._frame_id += 1
         profile = "critical" if critical else "normal"
         conf = self.s.conf_critical if critical else self.s.conf_normal
@@ -115,7 +125,7 @@ class Pipeline:
         # Blok B — araç takibi
         veh_dets = [d for d in detections if d.label == "vehicle"]
         veh_boxes = [(d.bbox.x1, d.bbox.y1, d.bbox.x2, d.bbox.y2) for d in veh_dets]
-        track_ids = self.tracker.update(veh_boxes)
+        track_ids = self.tracker.update(veh_boxes, ts=vts)
         for d, tid in zip(veh_dets, track_ids):
             d.track_id = tid
 
@@ -144,8 +154,16 @@ class Pipeline:
                 x2i, y2i = int(max(0, pv.bbox.x2)), int(max(0, pv.bbox.y2))
                 vehicle.color = _dominant_color(frame[y1i:y2i, x1i:x2i])
 
-            # Blok C — hız
-            vehicle.speed_kmh = estimate_speed(primary_track, w, h, fps, dt)
+            # Blok C — hız. Önce metrik (oto-kalibrasyon ısındıysa); yoksa eski
+            # kalibrasyonsuz sezgisel (is_calibrated=False). Ölçek-alanı önceki
+            # karelerin plaka/araç ölçümlerinden kurulur (warm-up, §4.3).
+            metric_kmh, calibrated = self.speed_estimator.estimate(primary_track)
+            if calibrated:
+                vehicle.speed_kmh = metric_kmh
+                vehicle.speed_is_calibrated = True
+            else:
+                vehicle.speed_kmh = estimate_speed(primary_track, w, h, fps, dt)
+                vehicle.speed_is_calibrated = False
 
             # Swerving
             if primary_track:
@@ -213,6 +231,31 @@ class Pipeline:
             if not vehicle.present and selected_plate_bbox:
                 vehicle.present = True
                 vehicle.vtype = "vehicle"
+
+        # Oto-kalibrasyon ölçek-alanı birikimi (§4.3 ısınma) — sonraki karelerin
+        # metrik hızı için. Plaka: yüksek-kesinlik çapa; tüm araçlar: sınıf-bazlı
+        # genişlikten düşük-ağırlıklı yedek (Aşama 2). Hız (Blok C) önceki karelerin
+        # ölçeğini kullandığından sıralama güvenli.
+        if vehicle.plate_bbox is not None:
+            self.speed_estimator.observe_plate(vehicle.plate_bbox)
+        for d in veh_dets:
+            self.speed_estimator.observe_vehicle(d.bbox, d.attributes.get("vtype"))
+        if vehicle.present:
+            self.speed_estimator.maybe_fit()
+        # Silinen track'lerin hız-EMA durumunu temizle (bellek sızıntısı önleme)
+        self.speed_estimator.prune(set(self.tracker.tracks.keys()))
+
+        # Aşama 4 — opsiyonel otomatik şerit homografisi (varsayılan kapalı).
+        # Açıksa periyodik olarak kareden şerit→homografi dener; kurulursa metrik
+        # hız ppm(y) yerine perspektif-tam homografiyi kullanır (§7.1).
+        if (getattr(self.s, "homography_auto", False)
+                and self.speed_estimator.homography is None
+                and frame is not None and frame.size
+                and self._frame_id % max(1, self.s.homography_calib_interval) == 0):
+            from ai.lane_detect import detect_lane_homography
+            H = detect_lane_homography(frame, self.s.lane_width_m, self.s.dash_pitch_m)
+            if H is not None:
+                self.speed_estimator.set_homography(H)
 
         result.vehicle = vehicle
 
