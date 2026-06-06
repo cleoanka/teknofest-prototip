@@ -222,7 +222,18 @@ def process_video(
             frame_proc = frame
 
         is_critical = True  # Video test modunda daima kritik (plaka + sürücü)
-        result, _ = pipeline.process(frame_proc, critical=is_critical, fps=src_fps)
+        # Aşama 0 — video-zaman çizgisi damgası: önce gerçek PTS (VFR'yi de doğru
+        # ele alır), yoksa indeks/fps (CFR). Wall-clock İŞLEME süresi DEĞİL — kareler
+        # arası gerçek video süresi hız Δt'sine girsin diye.
+        pts_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+        if pts_ms and pts_ms > 0:
+            frame_ts = pts_ms / 1000.0
+        elif src_fps > 0:
+            frame_ts = frame_idx / src_fps
+        else:
+            frame_ts = None
+        result, _ = pipeline.process(frame_proc, critical=is_critical,
+                                     fps=src_fps, frame_ts=frame_ts)
         result_dict = result.model_dump()
         result_dict["frame_id"] = frame_idx
         results.append(result_dict)
