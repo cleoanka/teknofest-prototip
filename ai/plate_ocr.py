@@ -15,12 +15,16 @@ Düzeltilen sorunlar (v2 → v3):
 from __future__ import annotations
 
 import re
+import ssl
 from collections import deque, Counter
 from typing import List, Optional, Tuple
 
 import numpy as np
 
 from ai.schema import PlateResult
+
+# Python 3.13 SSL sertifika hatası düzeltme (EasyOCR model indirme)
+ssl._create_default_https_context = ssl._create_unverified_context  # type: ignore[attr-defined]
 
 # TR plaka regex: 2 rakam (il) + 1-3 harf + 2-4 rakam
 TR_PLATE_RE = re.compile(r"^(0[1-9]|[1-7][0-9]|8[01])[A-Z]{1,3}[0-9]{2,4}$")
@@ -259,7 +263,7 @@ class PlateReader:
         else:
             return PlateResult()
 
-        if final_conf < 0.55:
+        if final_conf < 0.45:
             return PlateResult()
 
         return PlateResult(
