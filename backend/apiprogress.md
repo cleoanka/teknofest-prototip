@@ -17,18 +17,22 @@
 | /api/vehicles/{plate} | ✅ | Plaka bazlı olay geçmişi, TR plaka format validasyon |
 | /api/events/{id} | ✅ | Tek olay ID ile sorgulama |
 | /api/events/export | ✅ | CSV download, filtre parametreleri uygulanıyor |
-| /api/events X-Total-Count header | ✅ | REST standart response header |
+| /api/events offset pagination | ✅ | `?offset=N` ile sayfalama, X-Offset + X-Filtered-Count header |
 | Event filtering (from_ts/to_ts/level/vtype) | ✅ | db.py SQL güncellendi, parametreli |
 | /api/settings (GET) | ✅ | Salt-okunur ayar görüntüleme, hassas bilgiler hariç |
 | /api/settings (PATCH) | ✅ | Runtime QoD eşik güncelleme, demo için |
 | /.well-known/jwks.json | ✅ | RS256 public key PEM endpoint |
 | /camara/qod/sessions (GET) | ✅ | Aktif oturum listesi |
+| /api/qod/proof | ✅ | ÖTR %40 bant verimliliği kriteri kanıtı — jüri için |
 | WS /ws/ingest frame size limit (5 MB) | ✅ | Boyut kontrolü |
 | WS /ws/detections | ✅ | disconnect cleanup, WS sayacı |
 | WS /ws/status | ✅ | 1 sn aralıkla sistem durumu akışı |
 | Latency tracking (total_latency_ms) | ✅ | client_ts, server_recv_ts, FrameResult alanı |
 | Prometheus /metrics | ✅ | HTTP metrikler + custom counter/gauge/histogram |
 | /api/health zenginleştirme | ✅ | uptime_s, event_count, ws_connections |
+| GZip middleware | ✅ | minimum_size=500 bayt, büyük yanıtlar otomatik sıkıştırılır |
+| Güvenlik başlıkları | ✅ | X-Content-Type-Options, X-Frame-Options, X-XSS-Protection |
+| X-Request-ID izleme | ✅ | İstemci başlığı yankılanır veya sunucu UUID üretir |
 
 ---
 
@@ -88,7 +92,7 @@ Filtre parametrelerini destekliyor (from_ts, to_ts, level, vtype).
 ```
 Son çalıştırma: 2026-06-06
 Durum: TÜM TESTLER YEŞİL ✅
-Toplam test: 144 (73 eski → 144 yeni)
+Toplam test: 162 (73 eski → 162 yeni)
 Ortam: AI_MODE=mock, DB=:memory:
 ```
 
@@ -101,6 +105,7 @@ Ortam: AI_MODE=mock, DB=:memory:
 | test_filtering.py | 12 | from_ts/to_ts/level/vtype filtreleme |
 | test_health.py | 2 | /api/health, /api/qod/status |
 | test_latency.py | 5 | total_latency_ms, client_ts, WS frame limiti |
+| test_middleware_and_proof.py | 18 | GZip, güvenlik başlıkları, qod/proof, offset pagination |
 | test_new_endpoints.py | 18 | vehicles/{plate}, events/{id}, export, QoD list |
 | test_patch_settings.py | 10 | Runtime settings, events/summary |
 | test_pipeline_schema.py | 4 | FrameResult şema doğrulama |
