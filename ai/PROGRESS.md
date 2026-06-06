@@ -172,10 +172,24 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
   → `models/yolguvenligi_types_v1.pt`, `.env` `YOLO_MODEL_CRITICAL`. Pipeline `vehicle.vtype` üretiyor (doğrulandı).
   Zayıf: truck (415 kutu), phone (262, küçük). **minibus + license_plate/cigarette/seatbelt/headphone = 0 veri.**
 
+### ✅ Tamamlanan (6 Haziran — veri takviyesi + minibüs → yg_types_v2)
+- **train2017 hedefli takviye** (`supplement_coco.py`, retry'lı indirme): truck/phone içeren ~10k imaj
+  indirilip train'e eklendi → truck 415→10367 kutu, phone 262→6695 (25×). car/person/bus/moto da büyüdü.
+- **Minibüs** (`merge_yolo.py` + Roboflow `proj1-9o1hk/minibus-wb4sr`, CC BY 4.0): ad-bazlı remap ile
+  1189 minibüs + 74 car kutusu birleştirildi (train+val). val'e minibüs eklendi → mAP ölçülebilir.
+- **`yg_types_v2`** (run yg_types_v3; donuk omurga, batch32, 20ep; train 14171 / val 855 imaj):
+
+  | car | minibus | bus | truck | motorcycle | person | phone | ALL |
+  |---|---|---|---|---|---|---|---|
+  | .615 | **.966** | .689 | .529 | .716 | .768 | .504 | **.684** |
+
+  v1→v2: ALL .559→**.684**; truck +.10, phone +.19, minibüs 0→**.97**. → `models/yolguvenligi_types_v2.pt`,
+  `.env`. **Git LFS** ile commit'li (`.gitattributes`: `models/*.pt filter=lfs`).
+
 ### ⏭️ Sıradaki (öncelik sırası)
-0. **Minibüs verisi (Roboflow):** anahtar çalışıyor; iyi bir minibüs içeren set bul (fypyolo adayı kötüydü:
-   152 imaj, dengesiz) → sınıfları TARGET'a remap et → datasets/yolguvenligi'ye birleştir → yeniden eğit.
-1. **truck/phone'u güçlendir:** daha çok COCO (train2017) veya BDD100K ile bu zayıf sınıfları besle.
+1. **`eval/evaluate.py` — QoD %40 kanıtı:** mock kanıt çalışıyor; gerçek v2 modeliyle tazele + per-sınıf rapora bağla.
+2. **cigarette/seatbelt/headphone verisi:** Roboflow/manuel → bu 3 sürücü-davranışı sınıfını da kapat.
+3. **truck'ı biraz daha güçlendir** (.53) gerekirse; INT8 export + FPS ölçümü (plan Bölüm 9).
 2. **`eval/evaluate.py` — QoD %40 kanıtı (plan Bölüm 8):** mock kanıt ÇALIŞIYOR (cabin 0→73, bant tasarrufu
    ~%22). Eksik: gerçek `best.pt` v0 ile çalıştırıp sayıyı tazele + per-sınıf mAP'i rapora bağla.
 3. **Faz 4 — Gerçek plaka OCR:** `pip install easyocr` (GPU) → gerçek-mod dumanında plate gerçek;
