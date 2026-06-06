@@ -186,9 +186,76 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
   v1→v2: ALL .559→**.684**; truck +.10, phone +.19, minibüs 0→**.97**. → `models/yolguvenligi_types_v2.pt`,
   `.env`. **Git LFS** ile commit'li (`.gitattributes`: `models/*.pt filter=lfs`).
 
+### ✅ Tamamlanan (6 Haziran — metrik hız: Aşama 0–1 / gercek_hiz_plani.md)
+- **Plan dokümante edildi:** `ai/gercek_hiz_plani.md` — kalibrasyonsuz sabit kameradan **metrik km/h**
+  oto-kalibrasyon stratejisi (A: plaka/araç ppm(y), B: şerit homografisi, C: kaçış noktası) + ground-truth'suz
+  doğrulama. 6 aşamalı yol haritası.
+- **Aşama 0 — Zaman ekseni (gerçek Δt/PTS):** Hız artık wall-clock İŞLEME süresini değil, **video-zaman
+  çizgisi** Δt'sini kullanıyor. `Track.ts_history` + `Track.dt_last()` eklendi → damgalı iki örnek arası
+  **gerçek geçen süre** (düşürülen kareleri/VFR'yi doğru ele alır). `pipeline.process(frame_ts=...)` PTS/
+  client_ts kabul ediyor; `tools/test_video.py` gerçek video PTS'i (`CAP_PROP_POS_MSEC`, yoksa indeks/fps)
+  besliyor; `backend/main.py` canlı akışta `client_ts`'i geçiyor. *Neden:* R5 — Δt yanlışsa ölçek mükemmel
+  olsa bile hız yanlış. *Ölçüm:* 3 yeni test (dt_last düşen-kare, yarı-süre→2×hız).
+- **Aşama 1 — Plaka ppm + ppm(y) ölçek-alanı → metrik km/h:** `ai/calibration.py` eklendi:
+  `plate_ppm()` (TR plakası **520 mm**'den yerel ppm; 520/120≈4.33 oran sapınca foreshortening reddi),
+  `ScaleField` (onlarca ölçümü görüntü-y'sine göre toplayıp **aykırı-dayanıklı ppm(y)** regresyonu; y-yayılımı
+  yoksa sabit ppm), `MetricSpeedEstimator` (yer-temas noktası `Track.foot_history`'den `v=Δs/Δt·3.6`).
+  Pipeline plakalardan ölçek-alanını **kareler boyunca ısıtıyor** (§4.3 warm-up); hazır olunca metrik,
+  değilse eski sezgisel. Şemaya **`vehicle.speed_is_calibrated`** bayrağı (§7.4 — gerçek km/h ile göreceli
+  karışmasın). settings: `plate_width_m`, `calib_min_samples`, `speed_metric_max_kmh` vb. *Ölçüm:* 11 yeni
+  test (sentetik: bilinen ppm=10 + 20px/0.1s → **72.0 km/h** analitik doğru); **tüm paket yeşil.**
+- **R5 güncellendi:** hız artık plaka görünürken **gerçek km/h** (kalibrasyonsuz sezgisel yalnız yedek,
+  `is_calibrated=False`). Aşama 2–6 (araç-genişliği yedeği, pencere/Kalman, şerit homografisi, eval, VP) sırada.
+- **Aşama 2 — Araç-genişliği yedeği + füzyon:** Plaka yokken sınıf-bazlı tipik genişlikten
+  (car 1.80 / truck-bus 2.50 / moto 0.80 m) ppm. Tekil araç ±%15-20 oynadığından (yandan görünüm bbox
+  genişliği=boy hatası) **düşük ağırlıklı** (0.25) örnek; plaka çapası **yüksek** (1.0). `ScaleField`
+  **ağırlıklı** polyfit + ağırlıklı aykırı-reddine geçti → çok araçtan istatistiksel sağlamlık (§4.3).
+  Pipeline artık **tüm** araçları ölçek-alanına besliyor (normal profilde de, plaka olmadan da metrik hız).
+  *Ölçüm:* 4 yeni test (araç-only ppm; plaka füzyonda baskın; araç-only → 18 km/h sentetik); **tüm paket yeşil.**
+- **Aşama 3 — Pencere + aykırı reddi + EMA (stabil km/h):** `estimate()` tek-kare farkından **pencereye**
+  (`speed_window_frames=6`) yükseldi: ardışık adımların **medyan** hızı. **Fiziksel-olmayan ivme reddi** —
+  medyandan `speed_max_accel_mps2·Δt` (8 m/s²) fazla sapan adımlar (ışınlanma/bbox sıçraması) atılır.
+  Track-başı **EMA** (`speed_ema_alpha=0.4`) kareler arası jitteri bastırır; silinen track'lerin durumu
+  `prune()` ile temizlenir (bellek). *Ölçüm:* 5 yeni test (pencereli sabit hız; ışınlanma adımı reddi →
+  18 km/h'de kalır; EMA ani değişimi 54→32 km/h yumuşatır; prune). **Tüm paket yeşil.**
+- **Aşama 4 — Şerit homografisi (perspektif-tam, en sağlam):** `ai/homography.py` —
+  `GroundHomography` (numpy-only **DLT**, cv2 gerekmez): bilinen 4 yer noktasından (şerit genişliği 3.50 m
+  × kesik çizgi adımı 12 m) görüntü→metrik yer düzlemi dönüşümü; `from_lane_markings()` kurar, `to_ground()`
+  pikseli (X,Z)'ye eşler. `MetricSpeedEstimator` **füzyon önceliği** kazandı (§7.1): homografi varsa
+  yer-temas noktaları yere izdüşürülüp Öklid mesafe (perspektif-tam, derinlikten bağımsız), yoksa ppm(y)'ye
+  düşer. `ai/lane_detect.py` — opsiyonel **best-effort** otomatik şerit→homografi (cv2-korumalı; güven
+  düşükse/cv2 yoksa None → ppm yedeği; **varsayılan kapalı** `homography_auto=False`). *Ölçüm:* 6 yeni test
+  (kalibrasyon noktaları birebir; iç-nokta round-trip; homografiyle 2 m/0.1 s → **72 km/h**; öncelik;
+  lane_detect nazik düşüş). **Tüm paket yeşil.** *Not:* oturum sırasında takım `pipeline.py`/`settings.py`'ye
+  iki-aşamalı plaka tespitini push'ladı; conflict çözülüp her iki taraf birleştirildi.
+- **Aşama 5 — Sentetik + çapraz-yöntem + `eval/speed_eval.py`:** Ground-truth olmadan güven (§8).
+  Perspektif-tam sentetik sahne (bilinen homografi) ile aracı **bilinen yer-hızında** koşturup MAE/MAPE ölçer.
+  **Bulgu (ölçülü):** Yöntem **B (homografi) MAE 0.00 km/h** (formül+birim birebir kanıt); Yöntem **A (ppm)
+  yanal harekette MAE 0.00** (geçerli rejim) ama **boyuna harekette MAE ~50 km/h** — ppm yanal ölçektir,
+  kameraya doğru perspektif sıkışmasını çözmez → **şerit görünürken homografi tercih** (§7.1 doğrulanır).
+  Overspeed kararı (B): **precision=recall=1.00**. Çapraz-yöntem |A−B| sapması "B'ye güven" sinyali.
+  Rapor `eval/speed_eval.log`'a yazılır; saf geometri (GPU/video gerekmez). *Ölçüm:* 6 yeni test. **Tüm paket yeşil.**
+- **Aşama 6 — Kaçış noktası (VP) self-kalibrasyon (bağımsız doğrulama):** `ai/vanishing_point.py` —
+  `vanishing_point()` çizgi segmentlerinin ortak kesişimini SVD ile bulur (paralelde None);
+  `focal_from_orthogonal_vps()` iki ortogonal VP'den odak uzaklığını geri kazanır (özdeşlik
+  (vp1−pp)·(vp2−pp)=−f²); `methods_agree()` / `confidence_from_agreement()` A/B/C üç-yöntem uyumundan
+  güven üretir (§6/§8.2 — üç yöntem yakınsa metrik hıza güven). Rol: üretimde zorunlu değil, **bağımsız
+  üçüncü çapraz-doğrulama**. *Ölçüm:* 6 yeni test (VP kesişim geri kazanımı; paralelde None; f=800 geri
+  kazanımı; ortogonal-olmayan→None; uyum/güven). **Tüm paket yeşil. → 6 aşamanın tamamı bitti.**
+
+### ✅ Tamamlanan (6 Haziran — QoD %40 kanıtı GERÇEK videoda)
+- **`eval/qod_video.py` (YENI):** `evaluate.py` sentetik mock karelerde çalışır (gerçek model orada 0 bulur);
+  bu modül **gerçek sürüş videosunu** (veya kare klasörünü) kare kare Pipeline + QoDManager'dan geçirir →
+  bant verimliliği, ilk kritik tetik, kritik kare oranı, `vtype` dağılımı, kabin tespitleri. GT gerekmez.
+- **Ölçüm (`C:\teknofest\testverisi`, v2 modeli):** video_1 %34, video_2 %39, video_3 %56 bant tasarrufu →
+  **ortalama ~%43** → şartnamenin **%40 QoD kriteri GERÇEK footage'da sağlandı** ✓. `vtype` gerçek videoda
+  doğrulandı (car/truck/motorcycle ayırt edildi). *Çerçeve:* doğruluk = gerçek per-sınıf mAP (.684);
+  QoD mekanizması = gerçek video bant ölçümü; mock senaryo = deterministik kavram kanıtı.
+
 ### ⏭️ Sıradaki (öncelik sırası)
-1. **`eval/evaluate.py` — QoD %40 kanıtı:** mock kanıt çalışıyor; gerçek v2 modeliyle tazele + per-sınıf rapora bağla.
-2. **cigarette/seatbelt/headphone verisi:** Roboflow/manuel → bu 3 sürücü-davranışı sınıfını da kapat.
+1. **cigarette/seatbelt/headphone verisi:** Roboflow/manuel → bu 3 sürücü-davranışı sınıfını da kapat (`merge_yolo` ile kat).
+2. **INT8 export** (`train --export engine-int8`) + gerçek FPS ölçümü (plan Bölüm 9).
+3. truck (.53) gerekirse biraz daha güçlendir (daha çok COCO/BDD).
 3. **truck'ı biraz daha güçlendir** (.53) gerekirse; INT8 export + FPS ölçümü (plan Bölüm 9).
 2. **`eval/evaluate.py` — QoD %40 kanıtı (plan Bölüm 8):** mock kanıt ÇALIŞIYOR (cabin 0→73, bant tasarrufu
    ~%22). Eksik: gerçek `best.pt` v0 ile çalıştırıp sayıyı tazele + per-sınıf mAP'i rapora bağla.
