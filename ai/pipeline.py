@@ -20,11 +20,13 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from ai.schema import FrameResult, Vehicle, Detection, BBox
+from ai.schema import FrameResult, Vehicle, Detection, BBox, PlateResult
 from ai.detector import build_detector, BaseDetector
 from ai.tracking import IOUTracker
 from ai.plate_ocr import PlateReader
 from ai.lp_detector import get_lp_detector
+from ai.plate_crop import looks_like_plate, refine_to_frame, plate_sharpness
+from ai.plate_tracker import PlateTracker
 from ai.driver_state import DriverMonitor
 from ai.speed import estimate_speed
 from ai.calibration import MetricSpeedEstimator
@@ -70,21 +72,6 @@ def _vehicle_crop(
     return (crop if crop.size > 0 else None), (x1, y1)
 
 
-def _fallback_plate_crop(frame: np.ndarray, vehicle_bbox: BBox) -> Optional[np.ndarray]:
-    """LP dedektör başarısız olursa araç bbox alt %50'sini OCR'a gönderir."""
-    if frame is None or frame.size == 0:
-        return None
-    v = vehicle_bbox
-    vw = v.x2 - v.x1
-    vh = v.y2 - v.y1
-    px1 = int(v.x1 + 0.05 * vw)
-    px2 = int(v.x2 - 0.05 * vw)
-    py1 = int(v.y1 + 0.50 * vh)
-    py2 = int(v.y2 - 0.01 * vh)
-    crop = frame[max(0, py1):py2, max(0, px1):px2]
-    return crop if crop.size > 0 else None
-
-
 class Pipeline:
     def __init__(self, detector: Optional[BaseDetector] = None, settings=None):
         self.s = settings or get_settings()
@@ -93,6 +80,7 @@ class Pipeline:
         self.plate_reader = PlateReader(mode=self.s.ai_mode)
         self.driver = DriverMonitor(mode=self.s.ai_mode)
         self.lp_detector = get_lp_detector(mode=self.s.ai_mode)
+        self.plate_tracker = PlateTracker(ttl_frames=self.s.plate_track_ttl_frames)
         self.speed_estimator = MetricSpeedEstimator(self.s)
         self._last_t = time.time()
         self._frame_id = 0
@@ -100,6 +88,44 @@ class Pipeline:
     @property
     def mode_name(self) -> str:
         return type(self.detector).__name__
+
+    def _find_plate(
+        self, frame: np.ndarray, vehicle_bbox: Optional[BBox], w: int, h: int
+    ) -> Tuple[Optional[BBox], Optional[np.ndarray]]:
+        """LP dedektörle plaka adayını bul.
+
+        Araç bbox varsa SADECE araç crop'unda arar → araç dışı false positive
+        (trafik levhası, duvar) tamamen elenir. Araç bbox yoksa (TOGG: COCO araç
+        kutusu veremez) full frame'de arar.
+
+        Dönüş: (full_frame_bbox | None, plate_crop | None). Crop, araç crop'undan
+        alınır (piksel kalitesi daha iyi); bbox full-frame koordinata çevrilir.
+        """
+        if vehicle_bbox is not None:
+            veh_crop, (ox, oy) = _vehicle_crop(frame, vehicle_bbox)
+            if veh_crop is None or veh_crop.size == 0:
+                return None, None
+            local = self.lp_detector.detect(veh_crop)
+            if not local:
+                return None, None
+            best = max(local, key=lambda b: b.area)
+            bbox = BBox(x1=best.x1 + ox, y1=best.y1 + oy,
+                        x2=best.x2 + ox, y2=best.y2 + oy)
+            lx1, ly1 = max(0, int(best.x1)), max(0, int(best.y1))
+            lx2 = min(veh_crop.shape[1], int(best.x2))
+            ly2 = min(veh_crop.shape[0], int(best.y2))
+            crop = veh_crop[ly1:ly2, lx1:lx2]
+            return bbox, (crop if crop.size > 0 else None)
+
+        # TOGG / araç bbox yok → full frame
+        full = self.lp_detector.detect(frame)
+        if not full:
+            return None, None
+        best = max(full, key=lambda b: b.area)
+        fx1, fy1 = max(0, int(best.x1)), max(0, int(best.y1))
+        fx2, fy2 = min(w, int(best.x2)), min(h, int(best.y2))
+        crop = frame[fy1:fy2, fx1:fx2]
+        return best, (crop if crop.size > 0 else None)
 
     def process(self, frame: np.ndarray, critical: bool,
                 fps: float = 30.0,
@@ -173,62 +199,56 @@ class Pipeline:
             vehicle.driver_bbox = DriverMonitor.driver_roi(vehicle.bbox, (h, w))
             vehicle.passenger_bbox = DriverMonitor.passenger_roi(vehicle.bbox, (h, w))
 
-        # Blok D — İki aşamalı plaka tespiti (kritik profilde)
+        # Blok D — Plaka tespiti + crop + araç-id'sine bağlı kararlılık (kritik profilde)
         if critical and frame is not None and frame.size:
-            selected_plate_bbox: Optional[BBox] = None
-            plate_crop: Optional[np.ndarray] = None
+            # Aşama 1+2: plaka adayını bul (araç crop tercih; yoksa full frame → TOGG).
+            cand_bbox, plate_crop = self._find_plate(frame, vehicle.bbox, w, h)
 
-            if vehicle.bbox:
-                # Aşama 1: Araç crop (araç dışı false positive'leri eliyor)
-                veh_crop, (ox, oy) = _vehicle_crop(frame, vehicle.bbox)
+            cur_plate = PlateResult()
+            cur_bbox: Optional[BBox] = None
+            cur_sharp = 0.0
 
-                if veh_crop is not None and veh_crop.size > 0:
-                    # Aşama 2: LP dedektör SADECE araç crop üzerinde
-                    local_bboxes = self.lp_detector.detect(veh_crop)
+            # Saçma bölgeleri ele: yalnız plaka-benzeri crop OCR'a gönderilir
+            # (trafik levhası, far, tampon yazısı vb. burada düşer).
+            if plate_crop is not None and looks_like_plate(
+                plate_crop,
+                min_std=self.s.plate_min_likeness_std,
+                min_edge_density=self.s.plate_min_edge_density,
+            ):
+                # "Siyah çerçeveyi takip et": ROI'yi plakanın koyu çerçevesine sıkılaştır.
+                ocr_crop = plate_crop
+                if self.s.plate_refine_crop:
+                    refined = refine_to_frame(plate_crop, deskew=self.s.plate_deskew)
+                    if refined is not None and refined.size > 0:
+                        ocr_crop = refined
+                cur_sharp = plate_sharpness(ocr_crop)
+                cur_plate = self.plate_reader.read(ocr_crop)
+                cur_bbox = cand_bbox
 
-                    if local_bboxes:
-                        best_local = max(local_bboxes, key=lambda b: b.area)
-
-                        # Lokal koordinat → full-frame koordinat
-                        selected_plate_bbox = BBox(
-                            x1=best_local.x1 + ox, y1=best_local.y1 + oy,
-                            x2=best_local.x2 + ox, y2=best_local.y2 + oy,
-                        )
-                        # Plate crop: araç crop üzerindeki piksel kalitesi daha iyi
-                        lx1 = max(0, int(best_local.x1))
-                        ly1 = max(0, int(best_local.y1))
-                        lx2 = min(veh_crop.shape[1], int(best_local.x2))
-                        ly2 = min(veh_crop.shape[0], int(best_local.y2))
-                        plate_crop = veh_crop[ly1:ly2, lx1:lx2]
-                        if plate_crop.size == 0:
-                            plate_crop = None
+            # Araç id'sine bağlı süreklilik: en iyi okumayı sakla, kararlıyı geri al.
+            # Plaka bu karede yoksa aracın son bilinen plakası korunur (titremez,
+            # boş/yanlış kayda düşmez).
+            if vehicle.track_id is not None:
+                self.plate_tracker.update(
+                    vehicle.track_id, cur_plate, cur_bbox, cur_sharp, self._frame_id)
+                stable_plate, stable_bbox, stable_pw = \
+                    self.plate_tracker.resolve(vehicle.track_id)
+                vehicle.plate = stable_plate if stable_plate.text else cur_plate
+                if stable_bbox is not None:
+                    vehicle.plate_bbox = stable_bbox
+                    vehicle.plate_pixel_width = stable_pw
+                elif cur_bbox is not None:
+                    vehicle.plate_bbox = cur_bbox
+                    vehicle.plate_pixel_width = round(cur_bbox.width, 1)
             else:
-                # TOGG senaryosu: COCO araç bbox veremiyor → full frame'de ara
-                full_bboxes = self.lp_detector.detect(frame)
-                if full_bboxes:
-                    best_fb = max(full_bboxes, key=lambda b: b.area)
-                    selected_plate_bbox = best_fb
-                    fbx1 = max(0, int(best_fb.x1))
-                    fby1 = max(0, int(best_fb.y1))
-                    fbx2 = min(w, int(best_fb.x2))
-                    fby2 = min(h, int(best_fb.y2))
-                    plate_crop = frame[fby1:fby2, fbx1:fbx2]
-                    if plate_crop is not None and plate_crop.size == 0:
-                        plate_crop = None
-
-            # Fallback: LP dedektör plaka bulamazsa araç alt bölgesi
-            if plate_crop is None and vehicle.bbox:
-                plate_crop = _fallback_plate_crop(frame, vehicle.bbox)
-
-            if plate_crop is not None:
-                vehicle.plate = self.plate_reader.read(plate_crop)
-
-            if selected_plate_bbox is not None:
-                vehicle.plate_bbox = selected_plate_bbox
-                vehicle.plate_pixel_width = round(selected_plate_bbox.width, 1)
+                # track_id yok (ör. TOGG full-frame, araç bbox üretilemedi) → anlık sonuç.
+                vehicle.plate = cur_plate
+                if cur_bbox is not None:
+                    vehicle.plate_bbox = cur_bbox
+                    vehicle.plate_pixel_width = round(cur_bbox.width, 1)
 
             # TOGG: araç yoksa ama plaka bulunduysa present=True
-            if not vehicle.present and selected_plate_bbox:
+            if not vehicle.present and vehicle.plate_bbox is not None:
                 vehicle.present = True
                 vehicle.vtype = "vehicle"
 
@@ -243,7 +263,10 @@ class Pipeline:
         if vehicle.present:
             self.speed_estimator.maybe_fit()
         # Silinen track'lerin hız-EMA durumunu temizle (bellek sızıntısı önleme)
-        self.speed_estimator.prune(set(self.tracker.tracks.keys()))
+        alive_ids = set(self.tracker.tracks.keys())
+        self.speed_estimator.prune(alive_ids)
+        # Sahneden çıkmış araçların plaka durumunu da temizle (ttl ile)
+        self.plate_tracker.prune(alive_ids, self._frame_id)
 
         # Aşama 4 — opsiyonel otomatik şerit homografisi (varsayılan kapalı).
         # Açıksa periyodik olarak kareden şerit→homografi dener; kurulursa metrik

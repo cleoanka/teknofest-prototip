@@ -157,9 +157,23 @@ class Settings(BaseSettings):
 
     # Plaka YOLO dedektörü
     lp_model_path: str = Field(default="")        # LP_MODEL_PATH → yerel .pt yolu (öncelik 1)
-    lp_hf_download: bool = Field(default=False)   # LP_HF_DOWNLOAD → HuggingFace opt-in
-    lp_conf: float = Field(default=0.20)          # YOLO eşiği (araç crop'unda düşük olabilir)
+    lp_hf_download: bool = Field(default=False)   # LP_HF_DOWNLOAD → eski opt-in bayrağı (geriye uyum)
+    # Otomatik indirme: model yoksa ilk gerçek koşumda HuggingFace'den çek ve önbelleğe al.
+    # Varsayılan AÇIK — CV fallback trafik levhasını plaka sanıyordu; gerçek model şart.
+    # Mock/CI (LP_MOCK=1) bu yola hiç girmez → ağ/model gerekmez (K4 korunur).
+    lp_auto_download: bool = Field(default=True)  # LP_AUTO_DOWNLOAD=0 ile kapatılır
+    # İndirilecek model (tek-sınıf license_plate; ultralytics ile yüklenir, ~5-6 MB).
+    lp_model_repo: str = Field(default="morsetechlab/yolov11-license-plate-detection")
+    lp_model_file: str = Field(default="license-plate-finetune-v1n.pt")
+    lp_conf: float = Field(default=0.25)          # YOLO eşiği (araç crop'unda makul precision)
     lp_mock: bool = Field(default=False)          # LP_MOCK → CI/test için LP atla
+
+    # Plaka crop "siyah çerçeveyi takip et" katmanı (ai/plate_crop.py)
+    plate_refine_crop: bool = Field(default=True)     # ROI içinde plaka çerçevesine sıkılaştır
+    plate_deskew: bool = Field(default=True)          # belirgin eğikse düzleştir
+    plate_min_likeness_std: float = Field(default=18.0)   # plaka-benzerlik: min kontrast (std)
+    plate_min_edge_density: float = Field(default=0.04)   # plaka-benzerlik: min dikey kenar yoğunluğu
+    plate_track_ttl_frames: int = Field(default=45)       # araç kaybolunca plaka durumu ttl'i
 
     # Türk plakası fiziksel boyutları — mesafe kalibrasyonu için sabit (mm)
     plate_real_width_mm: float = Field(default=520.0)   # standart araç plakası

@@ -4,10 +4,11 @@ Plaka tespiti — iki katmanlı yaklaşım.
 Kullanım: pipeline her zaman araç crop'unu geçirir (full frame değil).
 Bu sayede trafik levhası / duvar gibi yanlış tespitler tamamen önlenir.
 
-Katman 1 — YOLO plaka modeli (yerel .pt veya opt-in indirme):
-  - LP_MODEL_PATH=/path/to/model.pt  → doğrudan yerel model
-  - LP_HF_DOWNLOAD=1                 → HuggingFace'den indirme dener
-  - Hiçbiri yoksa → katman 2'ye düşer (ağ çağrısı yapılmaz)
+Katman 1 — YOLO plaka modeli (yerel .pt veya otomatik indirme):
+  - LP_MODEL_PATH=/path/to/model.pt  → doğrudan yerel model (öncelik 1)
+  - ~/.cache/teknofest/lp_yolo.pt    → önceden önbelleklenmiş model
+  - lp_auto_download (VARSAYILAN AÇIK)→ model yoksa HuggingFace'den çekip önbelleğe alır
+  - Mock/CI (LP_MOCK=1) → hiç indirme/CV yok, [] döner (ağsız garanti)
 
 Katman 2 — OpenCV CV fallback (CLAHE + kontur):
   - Model olmadan her koşulda çalışır
@@ -26,10 +27,14 @@ import numpy as np
 
 from ai.schema import BBox
 
-# HuggingFace opt-in indirme — LP_HF_DOWNLOAD=1 ile etkinleştirilir
-_HF_REPOS = [
-    ("keremberke/yolov8n-license-plate-detection", "best.pt"),
-    ("nickmuchi/yolov5-base-plates-detection", "best.pt"),
+# HuggingFace otomatik indirme adayları (sırayla denenir; ilki settings'ten gelir).
+# Doğrulanmış, ultralytics ile yüklenebilen tek-sınıf 'license_plate' modelleri:
+#   - morsetechlab/yolov11-license-plate-detection  (~5.3 MB, YOLO11n, çok-indirilen)
+#   - Koushim/yolov8-license-plate-detection         (~6.1 MB, YOLOv8n, yedek)
+# (Eski keremberke/yolov8n repo'su HF'den kaldırıldı → 401; bu yüzden değiştirildi.)
+_HF_FALLBACK_REPOS = [
+    ("morsetechlab/yolov11-license-plate-detection", "license-plate-finetune-v1n.pt"),
+    ("Koushim/yolov8-license-plate-detection", "best.pt"),
 ]
 
 
@@ -163,8 +168,8 @@ class LicensePlateDetector:
         Öncelik:
           1) settings.lp_model_path / LP_MODEL_PATH env (yerel .pt)
           2) ~/.cache/teknofest/lp_yolo.pt (önceden önbelleklenmiş)
-          3) HuggingFace indirme — sadece lp_hf_download=True / LP_HF_DOWNLOAD=1
-          Hiçbiri yoksa CV fallback aktif, ağ çağrısı yapılmaz.
+          3) Otomatik indirme — lp_auto_download (VARSAYILAN AÇIK) ya da eski lp_hf_download
+          Hiçbiri yoksa CV fallback aktif.
         """
         try:
             from ultralytics import YOLO
@@ -175,15 +180,24 @@ class LicensePlateDetector:
         cache_dir = os.path.expanduser("~/.cache/teknofest")
         cache_path = os.path.join(cache_dir, "lp_yolo.pt")
 
-        # 1) Açık yerel model yolu
+        # 1) Açık yerel model yolu + indirme ayarları
+        repos = list(_HF_FALLBACK_REPOS)
         try:
             from config.settings import get_settings
             s = get_settings()
             env_path = s.lp_model_path or os.environ.get("LP_MODEL_PATH", "")
-            hf_enabled = s.lp_hf_download or os.environ.get("LP_HF_DOWNLOAD") == "1"
+            env_flag = os.environ.get("LP_AUTO_DOWNLOAD", "")
+            auto = (env_flag.lower() not in ("0", "false", "no")) if env_flag \
+                else (s.lp_auto_download or s.lp_hf_download
+                      or os.environ.get("LP_HF_DOWNLOAD") == "1")
+            # Ayarlardan gelen birincil repo'yu en öne al (yinelenirse tekilleştir)
+            if s.lp_model_repo and s.lp_model_file:
+                primary = (s.lp_model_repo, s.lp_model_file)
+                repos = [primary] + [r for r in repos if r != primary]
         except Exception:
             env_path = os.environ.get("LP_MODEL_PATH", "")
-            hf_enabled = os.environ.get("LP_HF_DOWNLOAD") == "1"
+            auto = os.environ.get("LP_AUTO_DOWNLOAD", "").lower() not in ("0", "false", "no") \
+                or os.environ.get("LP_HF_DOWNLOAD") == "1"
 
         if env_path:
             if os.path.exists(env_path):
@@ -192,29 +206,42 @@ class LicensePlateDetector:
                 print(f"[LP Detector] LP_MODEL_PATH bulunamadı: {env_path}")
                 return
 
-        # 2) HF indirme (opt-in)
-        elif not os.path.exists(cache_path) and hf_enabled:
-            self._try_hf_download(cache_path)
+        # 2) Otomatik indirme (model önbellekte yoksa)
+        elif not os.path.exists(cache_path) and auto:
+            self._try_hf_download(cache_path, repos)
 
         # 3) Modeli yükle
         if os.path.exists(cache_path):
             try:
                 self._model = YOLO(cache_path)
                 self._using_model = True
-                print(f"[LP Detector] YOLOv8 model aktif: {cache_path}")
+                print(f"[LP Detector] YOLO plaka modeli aktif: {cache_path}")
             except Exception as e:
                 print(f"[LP Detector] Model yüklenemedi → CV fallback: {type(e).__name__}")
         else:
             print("[LP Detector] Yerel model yok → CV fallback aktif.")
 
-    def _try_hf_download(self, cache_path: str) -> None:
+    def _try_hf_download(self, cache_path: str, repos) -> None:
+        """HuggingFace'den ilk başarılı modeli indirip cache_path'e kopyalar.
+
+        SSL: doğrulamayı GLOBAL kapatmak yerine (MITM riski, bkz. plate_ocr.py notu)
+        certifi CA paketini bu işlem için ortam değişkeniyle ayarlar; varsa sistem
+        zaten doğru sertifikayı kullanır.
+        """
         try:
             from huggingface_hub import hf_hub_download
             import shutil
+            # Sertifika: doğrulamayı kapatmadan certifi CA'yı kullan (varsa).
+            try:
+                import certifi
+                os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+                os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+            except Exception:
+                pass
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-            for repo_id, filename in _HF_REPOS:
+            for repo_id, filename in repos:
                 try:
-                    print(f"[LP Detector] İndiriliyor: {repo_id}")
+                    print(f"[LP Detector] İndiriliyor: {repo_id}/{filename}")
                     dl = hf_hub_download(repo_id=repo_id, filename=filename)
                     shutil.copy(dl, cache_path)
                     print(f"[LP Detector] Önbelleklendi: {cache_path}")
