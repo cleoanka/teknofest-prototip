@@ -18,6 +18,55 @@
 
 ---
 
+## Katman 0 — Bilinen Hatalar (commit `7dad35d` kod incelemesi) `[ÖNCELİK: KRİTİK]`
+
+> İyileştirmelere geçmeden önce kapatılması gereken, son `fix(ai): plate_ocr & pipeline`
+> commitinde (`7dad35d`) tespit edilen sorunlar. İkisi gerçek hata, biri ayar regresyonu.
+
+### 0.1 Tüm process'te TLS doğrulaması kapalı `[🔴 GÜVENLİK — KRİTİK]`
+
+`ai/plate_ocr.py` modül seviyesinde (girintisiz, import anında çalışır):
+
+```python
+ssl._create_default_https_context = ssl._create_unverified_context
+```
+
+`backend/main.py → ai.pipeline → ai.plate_ocr` import zinciri nedeniyle backend ayağa
+kalktığı an **tüm sürecin** giden HTTPS sertifika doğrulaması kapanıyor — sadece EasyOCR
+model indirme değil; webhook, dış API, JWT anahtar çekme, CAMARA QoD çağrıları dahil hepsi.
+MITM açığı; "yol güvenliği" temalı, jüriye sunulan projede ciddi risk.
+
+**Çözüm (tercih sırasıyla):**
+1. Modeli önceden indirip imaja göm (`Dockerfile` `COPY`) → çalışma anında hiç HTTPS gerekmesin (en sağlam).
+2. `certifi` CA paketini kullan: `os.environ["SSL_CERT_FILE"] = certifi.where()` — doğrulamayı kapatma.
+3. Zorunluysa yamayı yalnızca ilk indirme çağrısının etrafına sar ve hemen eski context'i geri yükle
+   (global, kalıcı bırakma).
+
+### 0.2 Yanlış araca plaka atanabilir `[🟠 CORRECTNESS]`
+
+`ai/pipeline.py` Blok D: `_nearest_plate_to_vehicle()` "bu plaka başka araca ait" deyip
+`None` döndürdüğünde, çağıran taraf bunu ezip `max(plate_bboxes, key=area)` ile en büyük
+plakayı yine de atıyor → eşleştirme guard'ı pratikte ölü kod. Çok araçlı sahnede bir araca
+başka aracın plakası atanabilir; plaka kanıt/QoD olarak kaydedildiği için yanlış kayıt.
+
+**Çözüm:** Tek-araç (TOGG, COCO yanlış bbox) senaryosu ile çok-araç senaryosunu ayır —
+çerçevede tek araç varsa fallback en büyük plaka kabul edilebilir; `≥2` araç varsa guard
+`None` döndürdüğünde plaka **atanmamalı**.
+
+### 0.3 OCR kabul eşiği düşürüldü: 0.55 → 0.45 `[🟠 AYAR]`
+
+`ai/plate_ocr.py` → `final_conf < 0.45`. Daha çok yanlış-pozitif okuma; 0.2 ile birleşince
+yanlış plaka kaydı riski artar. PaddleOCR/dedektör iyileştirmesinden (Katman 3) sonra eşik
+video_1/2/3 üzerinde precision/recall ile yeniden ölçülüp ayarlanmalı.
+
+> **Not:** Commit mesajı plate_ocr.py için birçok iyileştirme (GPU/MPS, allowlist, CLAHE+Otsu
+> 4-varyant, konsensüs) sayıyor ama gerçek diff'te yalnızca SSL satırı + eşik değişikliği var;
+> geri kalanı ya zaten dosyadaydı ya da bu committe değil. Ayrıca pipeline.py "committed
+> versiyona restore" ile Canny tabanlı `_find_plate_crop` yaklaşımını geri alıyor — birinin
+> bilerek eklediği bir şeyse sessizce reverter, kontrol edilmeli.
+
+---
+
 ## Katman 1 — Plaka Tespiti (Bul)
 
 ### 1.1 Dedicated YOLO Plaka Modeli — YOLOv8n-plate `[ÖNCELİK: YÜKSEK]`
@@ -242,6 +291,8 @@ kamerayı bir kez kalibre edince tüm videolarda doğru mesafe hesabı verir.
 
 | Öncelik | Geliştirme | Etki | Süre |
 |---|---|---|---|
+| 0a | SSL global kapatmayı kaldır (Katman 0.1) | Güvenlik açığı kapanır | <1 saat |
+| 0b | Plaka-araç eşleştirme guard'ı (çok-araç, Katman 0.2) | Yanlış plaka kaydı önlenir | 1-2 saat |
 | 1 | Ana YOLO'ya `license_plate` sınıfı ekle (eğitim) | Ayrı LP model yok, single-pass | Eğitim süresiyle bağlı |
 | 2 | Plaka kalite skoru — en keskin kare seçimi | OCR başarısı %20-30 artış | 1-2 saat |
 | 3 | Karanlık ortam gamma agresifliği | Otopark senaryosu kurtarılır | 1 saat |
