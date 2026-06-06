@@ -21,8 +21,16 @@ class BBox(BaseModel):
     y2: float
 
     @property
+    def width(self) -> float:
+        return max(0.0, self.x2 - self.x1)
+
+    @property
+    def height(self) -> float:
+        return max(0.0, self.y2 - self.y1)
+
+    @property
     def area(self) -> float:
-        return max(0.0, self.x2 - self.x1) * max(0.0, self.y2 - self.y1)
+        return self.width * self.height
 
     @property
     def cx(self) -> float:
@@ -66,10 +74,11 @@ class Vehicle(BaseModel):
     plate: PlateResult = Field(default_factory=PlateResult)
     speed_kmh: Optional[float] = None
     bbox: Optional[BBox] = None
-    plate_bbox: Optional[BBox] = None    # Plaka kutusu (sarı)
-    driver_bbox: Optional[BBox] = None   # Sürücü tarafı ROI (mavi)
-    passenger_bbox: Optional[BBox] = None  # Yolcu tarafı ROI (turuncu)
-    swerving: bool = False               # Zigzag/şerit ihlali
+    plate_bbox: Optional[BBox] = None          # Plaka kutusu (sarı)
+    plate_pixel_width: Optional[float] = None  # px genişlik — mesafe kalibrasyonu (52cm / px_w)
+    driver_bbox: Optional[BBox] = None         # Sürücü tarafı ROI (mavi)
+    passenger_bbox: Optional[BBox] = None      # Yolcu tarafı ROI (turuncu)
+    swerving: bool = False                     # Zigzag/şerit ihlali
 
 
 class RiskAssessment(BaseModel):

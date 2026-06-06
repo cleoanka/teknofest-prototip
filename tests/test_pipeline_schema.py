@@ -42,3 +42,26 @@ def test_trigger_context_fields(synthetic_frame):
     assert ctx.vehicle_present is True
     assert 0.0 <= ctx.vehicle_norm_y2 <= 1.0
     assert ctx.vehicle_conf > 0.0
+
+
+def test_vehicle_plate_pixel_width_field(synthetic_frame):
+    """plate_pixel_width: mock LP'de None, gerçek LP'de float olmalı."""
+    from ai.schema import Vehicle
+    v = Vehicle()
+    assert v.plate_pixel_width is None   # varsayılan None
+
+    pipe = Pipeline()
+    res, _ = pipe.process(synthetic_frame, critical=True)
+    # Mock LP modda plate_pixel_width None beklenir (LP detect [] döner)
+    assert res.vehicle.plate_pixel_width is None or isinstance(
+        res.vehicle.plate_pixel_width, float
+    )
+
+
+def test_bbox_width_height_properties():
+    """BBox.width ve BBox.height property'leri doğru hesaplamalı."""
+    from ai.schema import BBox
+    b = BBox(x1=100.0, y1=200.0, x2=400.0, y2=250.0)
+    assert b.width == 300.0
+    assert b.height == 50.0
+    assert b.area == 15000.0

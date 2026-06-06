@@ -3,6 +3,7 @@ import os
 
 # Modeller indirilmeden, deterministik testler için mock mod.
 os.environ.setdefault("AI_MODE", "mock")
+os.environ.setdefault("LP_MOCK", "true")   # LP dedektör mock → CI'da ağ/model yok
 os.environ.setdefault("DB_PATH", ":memory:")
 
 import numpy as np
