@@ -59,7 +59,7 @@ export default function LiveScreen() {
     if (!camRef.current) return;
     try {
       const pic = await camRef.current.takePictureAsync({
-        base64: true, quality: STREAM.jpegQuality, skipProcessing: true,
+        base64: true, quality: STREAM.jpegQuality, skipProcessing: true, shutterSound: false,
       });
       if (pic?.base64) {
         sent.current = { w: pic.width, h: pic.height };
@@ -145,7 +145,7 @@ export default function LiveScreen() {
       {/* Kamera + overlay */}
       <Animated.View style={[s.previewWrap, { borderColor }]}>
         <View style={s.preview}>
-          <CameraView ref={camRef} style={StyleSheet.absoluteFill} facing={facing} />
+          <CameraView ref={camRef} style={StyleSheet.absoluteFill} facing={facing} animateShutter={false} />
 
           {(result?.detections ?? []).map((d, i) => {
             const c = BOX_COLOR(d.label);
