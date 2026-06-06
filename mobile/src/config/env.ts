@@ -7,7 +7,7 @@
 // Backend'in çalıştığı makinenin LAN adresi. Telefon ve bilgisayar AYNI Wi-Fi'de
 // olmalı. Mac'te `ipconfig getifaddr en0`, Windows'ta `ipconfig` ile öğren.
 // Çalışma zamanında Sistem sekmesinden de değiştirilebilir (geliştirme kolaylığı).
-export const DEFAULT_API_BASE = "http://192.168.1.20:8000";
+export const DEFAULT_API_BASE = "http://172.20.10.3:8000";
 
 // ── Kimlik doğrulama (CAMARA Number Verification — sessiz SIM doğrulama) ───────
 export const AUTH = {
