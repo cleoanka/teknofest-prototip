@@ -110,6 +110,7 @@ class Settings(BaseSettings):
     # JWT RS256 (ÖTR: JWT RS256 + 100 req/dak)
     require_auth: bool = Field(default=False)           # True → Bearer token zorunlu
     jwt_ttl_s: int = Field(default=3600)                # Token geçerlilik süresi (s)
+    jwt_private_key_path: str = Field(default="")       # PEM dosyası (boşsa her startup yeni anahtar)
 
     # Rate limiting (ÖTR: 100 req/dak per IP)
     rate_limit: int = Field(default=100)                # req/minute

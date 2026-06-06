@@ -42,9 +42,15 @@ def test_vehicles_by_plate_not_found():
 
 
 def test_vehicles_by_plate_api(client):
-    # /api/vehicles/{plate} — boş DB'de 404 beklenir
-    r = client.get("/api/vehicles/NOTEXIST123")
+    # Geçerli TR plaka formatı ama kayıt yok → 404
+    r = client.get("/api/vehicles/34ABC1234")
     assert r.status_code == 404
+
+
+def test_vehicles_by_plate_invalid_format(client):
+    # Geçersiz plaka formatı → 422
+    r = client.get("/api/vehicles/NOTEXIST")
+    assert r.status_code == 422
 
 
 def test_vehicles_api_list(client):

@@ -1,21 +1,14 @@
 """
 FastAPI backend — REST + WebSocket + mock CAMARA 5G API'leri.
 
-Yenilikler (2026-06-06):
-  - JWT RS256 kimlik doğrulama (ÖTR zorunlusu)
-  - Rate limiting 100 req/dak (ÖTR zorunlusu)
-  - /api/statistics, /api/events/{id}, /api/events/export, /api/vehicles/{plate}
-  - Olay filtreleme (from_ts, to_ts, level, vtype)
-  - /camara/qod/sessions GET (aktif oturum listesi)
-  - Uçtan uca gecikme ölçümü (client_ts → total_latency_ms)
-  - Prometheus /metrics endpoint
-  - WS frame boyutu limiti (5 MB)
-  - /api/health zenginleştirme (uptime, event_count, ws_connections)
+v1.1: JWT RS256, rate limiting, statistics, filtering, Prometheus
+v1.2: JWT key persistence, /api/settings, WS /ws/status, X-Total-Count, plate validation
 """
 import asyncio
 import io
 import csv
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from typing import Optional, Set
@@ -102,9 +95,20 @@ async def lifespan(app: FastAPI):
         state.store.close()
 
 
+_PLATE_RE = re.compile(r"^[0-9]{2}[A-Z][A-Z0-9]{0,2}[0-9]{2,5}$")
+
+
+def _validate_plate(plate: str) -> str:
+    """TR plaka formatını doğrula: NN+L[LL]+NNNN (örn. 34ABC1234). 422 fırlatır geçersizse."""
+    p = plate.strip().upper()
+    if not _PLATE_RE.match(p):
+        raise HTTPException(status_code=422, detail=f"Geçersiz plaka formatı: {plate!r}")
+    return p
+
+
 app = FastAPI(
     title="Akıllı Yol Güvenliği — 5G & YZ Backend",
-    version="1.1.0",
+    version="1.2.0",
     description="TEKNOFEST 2026 · CAMARA QoD + Number Verification + YZ Risk Motoru",
     lifespan=lifespan,
 )
@@ -233,11 +237,15 @@ async def events(
     vtype: Optional[str] = Query(default=None, description="Araç tipi: car|truck|bus|motorcycle"),
     _auth: Optional[dict] = Depends(require_auth),
 ):
-    """Riskli olay listesi — filtreleme ve sayfalama destekli."""
-    return [e.model_dump() for e in state.store.list(
+    """Riskli olay listesi — filtreleme ve sayfalama destekli. X-Total-Count header ile toplam sayı."""
+    evs = state.store.list(
         limit=limit, min_score=min_score,
         from_ts=from_ts, to_ts=to_ts, level=level, vtype=vtype,
-    )]
+    )
+    response = JSONResponse(content=[e.model_dump() for e in evs])
+    response.headers["X-Total-Count"] = str(state.store.count())
+    response.headers["X-Filtered-Count"] = str(len(evs))
+    return response
 
 
 @app.get("/api/events/export", tags=["events"])
@@ -333,9 +341,10 @@ async def vehicle_events(
     _auth: Optional[dict] = Depends(require_auth),
 ):
     """Belirli plakaya ait tüm olay geçmişi — tarih sıralı (yeniden eskiye)."""
-    evs = state.store.vehicles_by_plate(plate.upper(), limit=limit)
+    validated = _validate_plate(plate)
+    evs = state.store.vehicles_by_plate(validated, limit=limit)
     if not evs:
-        raise HTTPException(status_code=404, detail=f"Plaka bulunamadı: {plate}")
+        raise HTTPException(status_code=404, detail=f"Plaka bulunamadı: {validated}")
     return [e.model_dump() for e in evs]
 
 
@@ -345,6 +354,60 @@ async def clear(request: Request):
     """Olay veritabanını sıfırla — test ve demo için."""
     state.store.clear()
     return {"cleared": True}
+
+
+@app.get("/api/settings", tags=["system"])
+@limiter.limit(f"{settings.rate_limit}/minute")
+async def get_current_settings(request: Request):
+    """
+    Mevcut ayarları göster (salt okunur, hassas bilgiler hariç).
+
+    QoD eşikleri, rate limit, JWT TTL, CAMARA modu gibi demo sırasında
+    izlenebilecek tüm parametreler burada görünür.
+    """
+    s = state.settings
+    return {
+        "ai_mode": s.ai_mode,
+        "camara_mode": s.camara_mode,
+        "require_auth": s.require_auth,
+        "jwt_ttl_s": s.jwt_ttl_s,
+        "rate_limit_per_min": s.rate_limit,
+        "ws_max_frame_bytes": s.ws_max_frame_bytes,
+        "qod": {
+            "eval_period_ms": s.qod_eval_period_ms,
+            "bbox_growth_threshold": s.qod_bbox_growth_threshold,
+            "low_conf_threshold": s.qod_low_conf_threshold,
+            "ocr_conf_threshold": s.qod_ocr_conf_threshold,
+            "roi_line": s.qod_roi_line,
+            "ambiguous_low": s.qod_ambiguous_low,
+            "ambiguous_high": s.qod_ambiguous_high,
+            "release_conf": s.qod_release_conf,
+            "max_session_s": s.qod_max_session_s,
+            "consecutive_required": s.qod_consecutive_required,
+        },
+        "camara_bandwidth": {
+            "normal_mbps": s.camara_qod_normal_mbps,
+            "critical_mbps": s.camara_qod_critical_mbps,
+            "network_latency_ms": s.camara_network_latency_ms,
+        },
+        "speed": {
+            "limit_kmh": s.speed_limit_kmh,
+            "calibration_k": s.speed_calibration_k,
+        },
+    }
+
+
+@app.get("/.well-known/jwks.json", tags=["auth"])
+async def jwks():
+    """
+    JWT public key — istemciler token doğrulaması için kullanır.
+    RS256 algoritması; JWKS formatında PEM sunulur.
+    """
+    return {
+        "issuer": "5g-roadguard",
+        "algorithm": "RS256",
+        "public_key_pem": get_jwt_manager().public_key_pem(),
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -515,6 +578,38 @@ async def ws_detections(ws: WebSocket):
     finally:
         state.subscribers.discard(ws)
         ws_active_connections.labels(endpoint="detections").dec()
+
+
+@app.websocket("/ws/status")
+async def ws_status(ws: WebSocket):
+    """
+    Sistem durumu akışı — dashboard için 1 sn aralıkla QoD/event/bant bilgisi.
+
+    İstemci bağlanır, sunucu her saniye JSON yayınlar:
+      { ts, qod_mode, bandwidth_mbps, event_count, ws_connections,
+        bandwidth_efficiency, uptime_s, latency_ms }
+    """
+    await ws.accept()
+    ws_active_connections.labels(endpoint="status").inc()
+    try:
+        while True:
+            qod_st = state.qod.status()
+            payload = {
+                "ts": time.time(),
+                "qod_mode": qod_st.mode,
+                "bandwidth_mbps": qod_st.bandwidth_mbps,
+                "active_session_id": qod_st.active_session_id,
+                "event_count": state.store.count(),
+                "ws_connections": len(state.subscribers),
+                "bandwidth_efficiency": state.qod.bandwidth_efficiency(),
+                "uptime_s": round(time.time() - _start_time, 1),
+            }
+            await ws.send_json(payload)
+            await asyncio.sleep(1.0)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        ws_active_connections.labels(endpoint="status").dec()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
