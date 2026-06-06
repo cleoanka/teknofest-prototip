@@ -1,90 +1,57 @@
 import React, { useEffect, useRef } from "react";
 import { Animated, Text, TouchableOpacity, StyleSheet } from "react-native";
-import { ApiErrorKind } from "../api/client";
+import { colors, spacing, radius, font } from "../theme";
+import type { ApiErrorKind } from "../api/client";
 
-interface Props {
-  message: string;
-  kind: ApiErrorKind;
-  onDismiss: () => void;
-}
-
-const AUTO_DISMISS_MS = 4_000;
-
-const KIND_COLOR: Record<ApiErrorKind, string> = {
-  network: "#f5a623",  // turuncu — bağlantı yok
-  timeout: "#f5a623",  // turuncu — zaman aşımı
-  auth:    "#9b59b6",  // mor    — oturum hatası
-  server:  "#ff4d5e",  // kırmızı — sunucu hatası
+const KIND_COLOR: Record<string, string> = {
+  network: colors.warn,
+  timeout: colors.warn,
+  auth: colors.purple,
+  server: colors.danger,
+  parse: colors.danger,
+};
+const KIND_ICON: Record<string, string> = {
+  network: "📡", timeout: "⏱", auth: "🔒", server: "⚠", parse: "⚠",
 };
 
-const KIND_ICON: Record<ApiErrorKind, string> = {
-  network: "📡",
-  timeout: "⏱",
-  auth:    "🔒",
-  server:  "⚠",
-};
-
-export default function ErrorBanner({ message, kind, onDismiss }: Props) {
-  const translateY = useRef(new Animated.Value(-80)).current;
+/** Ekranın altından kayarak gelen, otomatik kapanan hata bandı. */
+export function ErrorBanner({ message, kind = "server", onDismiss }: {
+  message: string; kind?: ApiErrorKind; onDismiss: () => void;
+}) {
+  const y = useRef(new Animated.Value(120)).current;
+  const color = KIND_COLOR[kind] ?? colors.danger;
 
   useEffect(() => {
-    // Yukarıdan aşağı kayarak gir
-    Animated.spring(translateY, {
-      toValue: 0,
-      useNativeDriver: true,
-      bounciness: 4,
-    }).start();
-
-    // N saniye sonra otomatik kapat
-    const timer = setTimeout(() => slideOut(), AUTO_DISMISS_MS);
-    return () => clearTimeout(timer);
+    Animated.spring(y, { toValue: 0, useNativeDriver: true, bounciness: 5 }).start();
+    const t = setTimeout(close, 4000);
+    return () => clearTimeout(t);
   }, []);
 
-  const slideOut = () => {
-    Animated.timing(translateY, {
-      toValue: -80,
-      duration: 250,
-      useNativeDriver: true,
-    }).start(onDismiss);
+  const close = () => {
+    Animated.timing(y, { toValue: 120, duration: 220, useNativeDriver: true }).start(onDismiss);
   };
 
-  const color = KIND_COLOR[kind];
-  const icon = KIND_ICON[kind];
-
   return (
-    <Animated.View
-      style={[s.banner, { borderLeftColor: color, transform: [{ translateY }] }]}
-    >
-      <Text style={s.icon}>{icon}</Text>
-      <Text style={[s.message, { flex: 1 }]} numberOfLines={2}>{message}</Text>
-      <TouchableOpacity onPress={slideOut} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-        <Text style={s.close}>✕</Text>
+    <Animated.View style={[s.wrap, { borderColor: color + "55", transform: [{ translateY: y }] }]}>
+      <Text style={s.icon}>{KIND_ICON[kind] ?? "⚠"}</Text>
+      <Text style={[s.msg, { color }]} numberOfLines={2}>{message}</Text>
+      <TouchableOpacity onPress={close} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <Text style={[s.close, { color }]}>✕</Text>
       </TouchableOpacity>
     </Animated.View>
   );
 }
 
 const s = StyleSheet.create({
-  banner: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1b2540",
-    borderLeftWidth: 4,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    gap: 10,
-    zIndex: 999,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
+  wrap: {
+    position: "absolute", left: spacing.lg, right: spacing.lg, bottom: spacing.xl,
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    backgroundColor: colors.cardElev, borderWidth: 1, borderRadius: radius.lg,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+    shadowColor: "#000", shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 4 },
     elevation: 10,
   },
   icon: { fontSize: 18 },
-  message: { color: "#e6ecff", fontSize: 13, lineHeight: 18 },
-  close: { color: "#8a97bd", fontSize: 16, paddingLeft: 4 },
+  msg: { flex: 1, fontSize: font.small, fontWeight: font.medium, lineHeight: 19 },
+  close: { fontSize: 16, fontWeight: font.semibold },
 });
