@@ -20,7 +20,7 @@ from config.settings import TARGET_CLASSES
 
 # ── COCO → YOLO dönüştürme ──────────────────────────────────────────────────
 def _mini_coco():
-    """200x100 px görüntü; bir 'car' (→vehicle) ve bir 'cell phone' (→phone) kutusu."""
+    """200x100 px görüntü; bir 'car' (→car) ve bir 'cell phone' (→phone) kutusu."""
     return {
         "images": [{"id": 1, "file_name": "frame_001.jpg", "width": 200, "height": 100}],
         "categories": [
@@ -42,12 +42,12 @@ def test_coco_to_yolo_mapping_and_normalization():
     # boat atlandı → 2 kutu kaldı, 1 atlandı
     assert len(boxes) == 2
     assert skipped == 1
-    # car → vehicle (idx 0), merkez normalize: xc=100/200=0.5, yc=40/100=0.4, w=0.5, h=0.4
-    veh = [b for b in boxes if b[0] == TARGET_CLASSES.index("vehicle")][0]
+    # car → car (idx 0), merkez normalize: xc=100/200=0.5, yc=40/100=0.4, w=0.5, h=0.4
+    veh = [b for b in boxes if b[0] == TARGET_CLASSES.index("car")][0]
     assert veh[1] == 0.5 and veh[2] == 0.4 and veh[3] == 0.5 and veh[4] == 0.4
     # cell phone → phone
     assert any(b[0] == TARGET_CLASSES.index("phone") for b in boxes)
-    assert counts["vehicle"] == 1 and counts["phone"] == 1
+    assert counts["car"] == 1 and counts["phone"] == 1
     assert "boat" not in counts
 
 
@@ -90,14 +90,14 @@ def test_audit_counts_and_detects_leakage(tmp_path):
         (root / "labels" / split).mkdir(parents=True)
     # train: aynı stem hem train hem val'de → SIZINTI
     (root / "images" / "train" / "img1.jpg").write_bytes(b"x")
-    (root / "labels" / "train" / "img1.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+    (root / "labels" / "train" / "img1.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")  # idx 0 = car
     (root / "images" / "val" / "img1.jpg").write_bytes(b"x")
-    (root / "labels" / "val" / "img1.txt").write_text("2 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+    (root / "labels" / "val" / "img1.txt").write_text("2 0.5 0.5 0.2 0.2\n", encoding="utf-8")     # idx 2 = bus
 
     rep = audit_dataset(str(root), splits=("train", "val", "test"))
     assert rep["per_split"]["train"]["boxes"] == 1
-    assert rep["class_counts"]["vehicle"] == 1
-    assert rep["class_counts"]["person"] == 1
+    assert rep["class_counts"]["car"] == 1
+    assert rep["class_counts"]["bus"] == 1
     assert rep["total_boxes"] == 2
     # img1 her iki bölmede → sızıntı raporlanmalı
     assert any("img1" in x for x in rep["leakage"])

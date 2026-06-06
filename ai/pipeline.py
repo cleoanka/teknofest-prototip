@@ -189,9 +189,10 @@ class Pipeline:
                     vehicle.plate_bbox = selected_plate_bbox
 
             # LP dedektörden plaka bulundu ama araç yoksa vehicle.present=True yap
+            # (tip bilinmiyor → vtype None; 'vehicle' bir alt-tip değil)
             if not vehicle.present and plate_bboxes:
                 vehicle.present = True
-                vehicle.vtype = "vehicle"
+                vehicle.vtype = None
                 vehicle.plate_bbox = selected_plate_bbox
 
         result.vehicle = vehicle

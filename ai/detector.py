@@ -18,7 +18,7 @@ from typing import List, Optional
 import numpy as np
 
 from ai.schema import Detection, BBox
-from config.settings import get_settings, COCO_TO_CANONICAL
+from config.settings import get_settings, CANONICAL_MAP
 
 
 def _ultralytics_available() -> bool:
@@ -84,13 +84,12 @@ class YoloDetector(BaseDetector):
         for b in res.boxes:
             cls_id = int(b.cls[0])
             raw_name = names.get(cls_id, str(cls_id)) if isinstance(names, dict) else names[cls_id]
-            canonical = COCO_TO_CANONICAL.get(raw_name)
-            if canonical is None:
+            mapped = CANONICAL_MAP.get(raw_name)
+            if mapped is None:
                 continue
+            canonical, vtype = mapped       # araç alt-tipi → ("vehicle", "car"/"minibus"/...)
             x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]
-            attrs = {}
-            if raw_name in {"car", "truck", "bus", "motorcycle"}:
-                attrs["vtype"] = raw_name
+            attrs = {"vtype": vtype} if vtype else {}
             out.append(Detection(
                 label=canonical,
                 confidence=float(b.conf[0]),
