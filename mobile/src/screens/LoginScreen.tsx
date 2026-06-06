@@ -1,76 +1,106 @@
 import React, { useState } from "react";
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Platform } from "react-native";
-import { setApiBase, silentVerify } from "../api/client";
+import {
+  View, Text, TextInput, TouchableOpacity,
+  StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform,
+} from "react-native";
+import { setCredentials, verifyConnection } from "../api/client";
 
-const DEFAULT_IP = "192.168.1.20:8000";
+interface Props {
+  onSuccess: (token: string) => void;
+}
 
-export default function LoginScreen({ onSuccess }: { onSuccess: (token: string | null) => void }) {
-  const [serverHost, setServerHost] = useState(DEFAULT_IP);
-  const [deviceToken, setDeviceToken] = useState("device-guard-01");
-  const [phone, setPhone] = useState("+905320001122");
-  const [status, setStatus] = useState<string>("");
-  const [busy, setBusy] = useState(false);
+export default function LoginScreen({ onSuccess }: Props) {
+  const [url, setUrl] = useState("");
+  const [token, setToken] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const verify = async () => {
-    setBusy(true);
-    setStatus("Sunucuya bağlanıyor…");
-    setApiBase(serverHost);
+  const connect = async () => {
+    if (!url.trim()) { setError("Sunucu adresi girin."); return; }
+    setLoading(true);
+    setError(null);
     try {
-      const res = await silentVerify(deviceToken, phone);
-      if (res.devicePhoneNumberVerified) {
-        setStatus("✓ Doğrulandı");
-        setTimeout(() => onSuccess(res.token), 400);
-      } else {
-        setStatus("✗ SIM ↔ numara eşleşmedi");
-      }
+      await verifyConnection(url.trim(), token.trim());
+      setCredentials(url.trim(), token.trim());
+      onSuccess(token.trim());
     } catch (e: any) {
-      setStatus("Bağlantı hatası: " + e.message);
-    } finally { setBusy(false); }
+      setError(
+        e?.name === "TimeoutError"
+          ? "Sunucuya ulaşılamadı — zaman aşımı."
+          : `Bağlantı hatası: ${e?.message ?? "Bilinmeyen hata"}`,
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <View style={s.wrap}>
-      <View style={s.logo}><Text style={s.logoTxt}>YG</Text></View>
-      <Text style={s.title}>Akıllı Yol Güvenliği</Text>
-      <Text style={s.sub}>CAMARA Number Verification ile sessiz SIM doğrulama — SMS/kod yok.</Text>
+    <KeyboardAvoidingView
+      style={s.root}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <Text style={s.logo}>🛡</Text>
+      <Text style={s.title}>Yol Güvenliği</Text>
+      <Text style={s.subtitle}>Sunucu bağlantısı</Text>
 
-      <Text style={s.label}>Sunucu Adresi {Platform.OS === "android" ? "(Android)" : "(iOS)"}</Text>
-      <TextInput
-        style={s.input}
-        value={serverHost}
-        onChangeText={setServerHost}
-        placeholder="192.168.1.20:8000"
-        placeholderTextColor="#8a97bd"
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-      />
+      <View style={s.form}>
+        <Text style={s.label}>Sunucu Adresi</Text>
+        <TextInput
+          style={s.input}
+          placeholder="http://192.168.x.x:8000"
+          placeholderTextColor="#4a567a"
+          value={url}
+          onChangeText={setUrl}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+        />
 
-      <TextInput style={s.input} value={deviceToken} onChangeText={setDeviceToken}
-        placeholder="Cihaz token" placeholderTextColor="#8a97bd" autoCapitalize="none" />
-      <TextInput style={s.input} value={phone} onChangeText={setPhone}
-        placeholder="Hat numarası" placeholderTextColor="#8a97bd" keyboardType="phone-pad" />
+        <Text style={s.label}>Token (isteğe bağlı)</Text>
+        <TextInput
+          style={s.input}
+          placeholder="Bearer token"
+          placeholderTextColor="#4a567a"
+          value={token}
+          onChangeText={setToken}
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+        />
 
-      <TouchableOpacity style={s.btn} onPress={verify} disabled={busy}>
-        {busy ? <ActivityIndicator color="#fff" /> : <Text style={s.btnTxt}>Sessiz Doğrula & Giriş</Text>}
-      </TouchableOpacity>
-      <Text style={s.status}>{status}</Text>
-      <Text style={s.hint}>Demo: device-guard-01 → +905320001122</Text>
-      <Text style={s.hint}>Mac IP: terminalde {"`"}ipconfig getifaddr en0{"`"}</Text>
-    </View>
+        {error ? <Text style={s.error}>{error}</Text> : null}
+
+        <TouchableOpacity
+          style={[s.btn, loading && s.btnDisabled]}
+          onPress={connect}
+          disabled={loading}
+          activeOpacity={0.8}
+        >
+          {loading
+            ? <ActivityIndicator color="#fff" />
+            : <Text style={s.btnTxt}>Bağlan</Text>}
+        </TouchableOpacity>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const s = StyleSheet.create({
-  wrap: { flex: 1, justifyContent: "center", padding: 28 },
-  logo: { width: 64, height: 64, borderRadius: 16, backgroundColor: "#2f7bff", alignSelf: "center", alignItems: "center", justifyContent: "center", marginBottom: 18 },
-  logoTxt: { color: "#fff", fontWeight: "800", fontSize: 26 },
-  title: { color: "#e6ecff", fontSize: 24, fontWeight: "800", textAlign: "center" },
-  sub: { color: "#8a97bd", fontSize: 13, textAlign: "center", marginVertical: 14 },
-  label: { color: "#8a97bd", fontSize: 12, marginBottom: 4 },
-  input: { backgroundColor: "#1b2540", color: "#e6ecff", borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: "#25304f" },
-  btn: { backgroundColor: "#2f7bff", borderRadius: 12, padding: 16, alignItems: "center", marginTop: 6 },
+  root: { flex: 1, backgroundColor: "#0b1020", alignItems: "center", justifyContent: "center", padding: 32 },
+  logo: { fontSize: 56, marginBottom: 16 },
+  title: { color: "#e6ecff", fontSize: 28, fontWeight: "800" },
+  subtitle: { color: "#8a97bd", fontSize: 14, marginBottom: 40 },
+  form: { width: "100%", maxWidth: 360 },
+  label: { color: "#8a97bd", fontSize: 12, letterSpacing: 0.5, marginBottom: 6 },
+  input: {
+    backgroundColor: "#131a2e", borderWidth: 1, borderColor: "#25304f",
+    borderRadius: 12, padding: 14, color: "#e6ecff", fontSize: 15, marginBottom: 18,
+  },
+  error: { color: "#ff4d5e", fontSize: 13, marginBottom: 16, textAlign: "center" },
+  btn: {
+    backgroundColor: "#2f7bff", borderRadius: 12,
+    paddingVertical: 16, alignItems: "center", marginTop: 4,
+  },
+  btnDisabled: { opacity: 0.6 },
   btnTxt: { color: "#fff", fontWeight: "700", fontSize: 16 },
-  status: { color: "#2ecc71", textAlign: "center", marginTop: 14, minHeight: 20 },
-  hint: { color: "#8a97bd", fontSize: 11, textAlign: "center", marginTop: 4 },
 });
