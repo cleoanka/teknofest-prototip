@@ -1,7 +1,7 @@
 # Backend API Geliştirme Planı
 
 > TEKNOFEST 2026 · 5G & YZ Akıllı Yol Güvenliği — Backend/API Kolunun Eksiksiz Yol Haritası
-> Son güncelleme: 2026-06-06
+> Son güncelleme: 2026-06-06 (v1.4.0 — 233 test ✅)
 
 ---
 
@@ -136,6 +136,55 @@ Backend kolunun tek sorumluluğu var: **şartname gereksinimlerini karşılayan,
 - [x] `uptime_s` — sunucu çalışma süresi
 - [x] `event_count` — toplam kayıtlı olay
 - [x] `ws_connections` — aktif WS bağlantı sayısı
+
+### F6.2 /api/health/deep
+- [x] DB bağlantı testi (count sorgusu)
+- [x] QoD motor durumu kontrolü
+- [x] Bellek kullanımı (psutil varsa)
+- [x] 503 degraded modda
+
+---
+
+## Faz 7 — Gelişmiş API Özellikleri (v1.3–v1.4)
+
+### F7.1 Güvenlik & İzleme Middleware
+- [x] GZip sıkıştırma (minimum_size=500)
+- [x] X-Content-Type-Options, X-Frame-Options, X-XSS-Protection
+- [x] X-Request-ID (istemci değeri yankılanır veya UUID üretilir)
+- [x] X-Response-Time (milisaniye cinsinden)
+
+### F7.2 WebSocket Token Auth
+- [x] `?token=<JWT>` query param — tüm WS endpoint'leri
+- [x] REQUIRE_AUTH=true ile invalid token → close(4001)
+
+### F7.3 Pagination & Sıralama
+- [x] `/api/events?offset=N` — OFFSET pagination
+- [x] `/api/events?sort_by=ts|risk_score|speed_kmh|id&sort_dir=asc|desc`
+- [x] `/api/vehicles?offset=N` — araç listesi pagination
+- [x] X-Total-Count, X-Filtered-Count, X-Offset response headers
+- [x] db.count_filtered() — doğru toplam için ayrı COUNT sorgusu
+
+### F7.4 Demo & Geliştirici Kolaylıkları
+- [x] `POST /api/demo-token` — require_auth=False modda hızlı JWT
+- [x] `POST /api/events/test` — demo için test olay enjeksiyonu
+- [x] OpenAPI tag açıklamaları (7 kategori)
+- [x] Swagger UI özelleştirme (tryItOut, filter, persistAuth)
+
+### F7.5 Analitik Endpoint'ler
+- [x] `/api/qod/proof` — ÖTR %40 bant verimliliği kanıtı (10 alan)
+- [x] `/api/events/heatmap` — zaman×risk_level 2D matris
+- [x] `/api/vehicles/{plate}/timeline` — saatlik risk zaman serisi
+- [x] `/api/version` — Python/platform/ai_mode/build bilgisi
+- [x] `/api/ping` — ultralight gecikme ölçümü
+
+### F7.6 Tam CRUD
+- [x] `DELETE /api/events` — filtreli toplu silme (confirm=true)
+- [x] `DELETE /api/events/{id}` — tek olay silme
+- [x] `/api/events?plate=` — kısmi eşleşme arama
+
+### F7.7 Yapılandırılmış Loglama
+- [x] JSON formatter — her satır geçerli JSON
+- [x] uvicorn logları da JSON handler'a yönlendirildi
 
 ---
 

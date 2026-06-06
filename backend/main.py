@@ -281,6 +281,12 @@ async def qod_delete(request: Request, sid: str):
 # REST — Sistem
 # ──────────────────────────────────────────────────────────────────────────────
 
+@app.get("/api/ping", tags=["system"])
+async def ping():
+    """Ultralight gecikme ölçümü — sadece sunucu zaman damgası döner."""
+    return {"pong": round(time.time(), 3)}
+
+
 @app.get("/api/version", tags=["system"])
 async def version_info():
     """API sürüm bilgisi — bağımlılıklar, Python sürümü, ortam."""
@@ -495,6 +501,85 @@ async def events_bulk_delete(
     return {"deleted": deleted, "remaining": state.store.count()}
 
 
+@app.get("/api/events/heatmap", tags=["analytics"])
+@limiter.limit(f"{settings.rate_limit}/minute")
+async def events_heatmap(
+    request: Request,
+    hours: int = Query(default=24, ge=1, le=168, description="Kaç saatlik pencere (1–168)"),
+    _auth: Optional[dict] = Depends(require_auth),
+):
+    """
+    Zaman × risk seviyesi ısı haritası verisi — dashboard renk gridleri için.
+
+    Döndürür: NxM matris (satır=saat, sütun=risk_level).
+    Her hücre o saatte o risk seviyesindeki olay sayısıdır.
+    """
+    since = time.time() - hours * 3600
+    evs = state.store.list(limit=100000, from_ts=since)
+    levels = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    # hour_offset → level → count
+    grid: dict[int, dict[str, int]] = {}
+    for e in evs:
+        h = int((e.ts - since) / 3600)
+        if h not in grid:
+            grid[h] = {lvl: 0 for lvl in levels}
+        if e.risk_level in grid[h]:
+            grid[h][e.risk_level] += 1
+    rows = [
+        {"hour_offset": h, **grid[h]}
+        for h in sorted(grid)
+    ]
+    return {
+        "hours": hours,
+        "levels": levels,
+        "rows": rows,
+        "total_events": len(evs),
+    }
+
+
+class TestEventBody(BaseModel):
+    count: int = 5
+    risk_level: str = "HIGH"
+    plate_prefix: str = "34TEST"
+    speed_kmh: float = 120.0
+    spread_s: float = 3600.0
+
+
+@app.post("/api/events/test", tags=["tools"])
+@limiter.limit("20/minute")
+async def inject_test_events(request: Request, body: TestEventBody):
+    """
+    Demo test olayları enjekte et — sunum öncesi veritabanını doldurmak için.
+
+    count kadar olay oluşturur; risk_level, plaka öneki ve yayılım süresi ayarlanabilir.
+    """
+    import random
+    LEVEL_SCORE = {"LOW": 20, "MEDIUM": 45, "HIGH": 70, "CRITICAL": 90}
+    now = time.time()
+    score = LEVEL_SCORE.get(body.risk_level.upper(), 50)
+    added_ids = []
+    for i in range(min(body.count, 100)):
+        plate_suffix = f"{random.randint(1000, 9999)}"
+        plate = f"{body.plate_prefix[:8]}{plate_suffix}"[:12]
+        ev = EventRecord(
+            ts=now - random.uniform(0, body.spread_s),
+            plate=plate,
+            risk_score=score + random.randint(-5, 5),
+            risk_level=body.risk_level.upper(),
+            factors="speed,test",
+            mode="NORMAL",
+            speed_kmh=body.speed_kmh + random.uniform(-10, 10),
+        )
+        eid = state.store.add(ev)
+        added_ids.append(eid)
+    return {
+        "injected": len(added_ids),
+        "ids": added_ids,
+        "risk_level": body.risk_level.upper(),
+        "total_events": state.store.count(),
+    }
+
+
 @app.get("/api/events/{event_id}", tags=["events"])
 @limiter.limit(f"{settings.rate_limit}/minute")
 async def event_detail(
@@ -507,6 +592,20 @@ async def event_detail(
     if ev is None:
         raise HTTPException(status_code=404, detail=f"Olay bulunamadı: id={event_id}")
     return ev.model_dump()
+
+
+@app.delete("/api/events/{event_id}", tags=["events"])
+@limiter.limit(f"{settings.rate_limit}/minute")
+async def delete_event(
+    request: Request,
+    event_id: int,
+    _auth: Optional[dict] = Depends(require_auth),
+):
+    """Tek olay sil — ID ile. Bulunamazsa 404."""
+    deleted = state.store.delete_by_id(event_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Olay bulunamadı: id={event_id}")
+    return {"deleted": True, "id": event_id, "remaining": state.store.count()}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
