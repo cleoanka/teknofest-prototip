@@ -74,6 +74,7 @@ class Stage:
     patience: int = 20              # erken durdurma
     lr0: Optional[float] = None     # None → ultralytics varsayılanı; saha turunda düşük
     freeze: Optional[int] = None    # ısınmada omurgayı dondur (ör. ilk 10 katman)
+    cos_lr: bool = False            # kosinüs lr çizelgesi (pürüzsüz iniş; nazik fine-tune)
     aug: Dict[str, float] = field(default_factory=lambda: dict(FULL_AUG))
     note: str = ""
 
@@ -92,6 +93,8 @@ class Stage:
             kw["lr0"] = self.lr0
         if self.freeze is not None:
             kw["freeze"] = self.freeze
+        if self.cos_lr:
+            kw["cos_lr"] = True
         return kw
 
 
@@ -112,11 +115,21 @@ def resolve_tier(tier: str, base: Optional[str], imgsz: Optional[int]) -> Dict[s
 def build_curriculum(
     *, data: str, base: str, epochs: int, imgsz: int, batch: int, device: str,
     name: str, curriculum: bool, field_data: Optional[str] = None,
+    gentle: bool = False, main_freeze: Optional[int] = None,
 ) -> List[Stage]:
     """Aşama listesini kurar (plan 6.1). Aşamalar `base` üzerinden zincirlenir.
 
     - curriculum=False → tek aşama (ana fine-tune). Geriye-dönük uyumlu.
     - curriculum=True  → ısınma (omurga donuk, kısa) + ana.
+    - gentle=True      → ana aşama **nazik** reçete: hafif aug + düşük lr0 + cos_lr.
+      *Neden (bulgu K-008):* COCO-öneğitimli ağ, COCO'nun zaten bildiği sınıfların
+      küçük alt-kümesinde agresif augmentation (mosaic=1.0/mixup) + yüksek lr ile
+      fine-tune edilince özellikleri aşınıyor (ana<ısınma). Nazik reçete öneğitimli
+      özellikleri koruyup ince ayar yapar.
+    - main_freeze=N    → ana aşamada da ilk N katmanı (omurga) dondur.
+      *Neden (K-008 derinleşmesi):* Omurga çözülünce nazik reçete bile küçük alt-kümede
+      bozuyor; omurgayı donuk tutup başlığı uzun eğitmek (uzatılmış ısınma) en iyi sonucu
+      verdi. Küçük benzer-alan veride genelleme korunur.
     - field_data       → en sona düşük-lr saha-uyarlama aşaması eklenir.
     """
     stages: List[Stage] = []
@@ -134,12 +147,23 @@ def build_curriculum(
         ))
         main_base = stages[-1].best_path()   # ana aşama ısınmanın best.pt'sinden devam
 
-    # 2) Ana fine-tune: tüm 7 sınıf, tam augmentation, erken durdurma.
-    stages.append(Stage(
-        name=name, base=main_base, data=data, epochs=epochs, imgsz=imgsz,
-        batch=batch, device=device, patience=20, aug=dict(FULL_AUG),
-        note="ana fine-tune (tüm 7 sınıf, tam augmentation)",
-    ))
+    # 2) Ana fine-tune. gentle → nazik (K-008); aksi halde tam augmentation.
+    #    main_freeze verilirse omurga ana aşamada da donuk kalır.
+    if gentle:
+        stages.append(Stage(
+            name=name, base=main_base, data=data, epochs=epochs, imgsz=imgsz,
+            batch=batch, device=device, patience=20, lr0=0.002, cos_lr=True,
+            freeze=main_freeze, aug=dict(LIGHT_AUG),
+            note=("ana fine-tune NAZİK (hafif aug + lr0=0.002 + cos_lr"
+                  + (f" + freeze={main_freeze}" if main_freeze is not None else "") + "; K-008)"),
+        ))
+    else:
+        stages.append(Stage(
+            name=name, base=main_base, data=data, epochs=epochs, imgsz=imgsz,
+            batch=batch, device=device, patience=20, freeze=main_freeze, aug=dict(FULL_AUG),
+            note=("ana fine-tune (tüm 7 sınıf, tam augmentation"
+                  + (f", freeze={main_freeze}" if main_freeze is not None else "") + ")"),
+        ))
 
     # 3) Saha-uyarlama (opsiyonel): düşük lr, hafif aug → komite verisine ince ayar.
     if field_data:
@@ -282,6 +306,10 @@ def main():
     ap.add_argument("--name", default="yolguvenligi")
     ap.add_argument("--curriculum", action="store_true",
                     help="aşamalı müfredat: ısınma → ana (plan 6.1)")
+    ap.add_argument("--gentle", action="store_true",
+                    help="ana aşama nazik reçete: hafif aug + lr0=0.002 + cos_lr (bulgu K-008)")
+    ap.add_argument("--freeze", type=int, default=None,
+                    help="ana aşamada ilk N katmanı (omurga) dondur (örn. 10; bulgu K-008)")
     ap.add_argument("--field-data", default=None,
                     help="komite/TOGG data.yaml → sona saha-uyarlama aşaması ekle")
     ap.add_argument("--export", default=None, choices=EXPORT_MODES,
@@ -307,7 +335,8 @@ def main():
     stages = build_curriculum(
         data=args.data, base=str(tier["base"]), epochs=args.epochs, imgsz=int(tier["imgsz"]),
         batch=args.batch, device=device, name=args.name,
-        curriculum=args.curriculum, field_data=args.field_data,
+        curriculum=args.curriculum, field_data=args.field_data, gentle=args.gentle,
+        main_freeze=args.freeze,
     )
 
     # Export kwargs'ı baştan doğrula (INT8 data zorunluluğu burada erken yakalanır).
