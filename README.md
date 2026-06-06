@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
 ![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-purple)
 ![React Native](https://img.shields.io/badge/React%20Native-Expo-61DAFB?logo=react&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-248%20geçiyor-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-308%20geçiyor-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![GPU](https://img.shields.io/badge/GPU-CUDA%20%7C%20MPS%20%7C%20CPU-green)
 ![5G](https://img.shields.io/badge/5G-CAMARA%20QoD-red)
@@ -60,9 +60,9 @@ Normal → Tehlike Tespit → 5G QoD API → Bant 5→20 Mbps → Kritik Analiz 
 
 | Kriter | Ağırlık | Karşılığı |
 |--------|---------|-----------|
-| YZ doğruluğu (araç, plaka, hız, araç içi nesne) | **%40** | `ai/pipeline.py` — YOLOv8 + OCR + MediaPipe + risk |
-| 5G QoD — **yalnız ihtiyaç anında** bant yükseltme | **%40** | `ai/qod_trigger.py` (A–E koşul motoru) + `backend/qod_manager.py` |
-| Mimari & modern pratikler | **%20** | Katmanlı mimari, tip-güvenli şema, 248 test, `ARCHITECTURE.md` |
+| YZ doğruluğu (araç, plaka, hız, araç içi nesne) | **%40** | `ai/pipeline.py` — YOLOv8 + YOLO11n plaka + OCR + MediaPipe + risk |
+| 5G QoD — **yalnız ihtiyaç anında** bant yükseltme | **%40** | `ai/qod_trigger.py` (A–E koşul motoru) + `backend/qod_manager.py` · ~%43 bant tasarrufu ✓ |
+| Mimari & modern pratikler | **%20** | Katmanlı mimari, tip-güvenli şema, **308 test**, `ARCHITECTURE.md` |
 
 ---
 
@@ -121,32 +121,34 @@ npx expo start        # QR kodu telefonla okut (Expo Go uygulaması gerekli)
 ### 3 — Testler & Değerlendirme
 
 ```bash
-make test             # 248 pytest testi (model gerektirmez, mock modda çalışır)
+make test             # 308 pytest testi (model gerektirmez, mock modda çalışır)
 make eval             # sentetik veri + Normal/Kritik doğruluk raporu
 ```
 
 ---
 
-## Mevcut Durum (2026-06-06)
+## Mevcut Durum (2026-06-07)
 
 | Bileşen | Durum |
 |---------|-------|
 | YZ hattı (detector, tracking, speed, plate_ocr, driver_state, risk, qod_trigger, pipeline) | ✅ Hazır |
-| Mock modda uçtan uca çalışma | ✅ 248 test yeşil |
+| Mock modda uçtan uca çalışma | ✅ **308 test yeşil** |
 | Windows + CUDA doğrulaması (RTX 4070 Laptop) | ✅ Tamamlandı |
 | Gerçek YOLOv8 GPU çıkarımı (**72.7 FPS** yolov8n, RTX 4070) | ✅ Tamamlandı |
 | Eğitim/veri araçları (`prepare_dataset`, `train`, `fetch_data`) | ✅ Hazır |
 | JWT RS256 kimlik doğrulama + rate limiting (100 req/dak) | ✅ Tamamlandı |
 | Prometheus `/metrics` + Grafana hazır | ✅ Tamamlandı |
 | Uçtan uca gecikme ölçümü (`total_latency_ms`) | ✅ Tamamlandı |
-| Zengin API (statistics, vehicles/{plate}, events/{id}, export, heatmap) | ✅ Tamamlandı |
-| Plaka OCR — çok-blok birleştirme + Tesseract yedek (v2.2) | ✅ Tamamlandı |
-| Sigara tespiti — el-ağız heuristic (v2.2) | ✅ Tamamlandı |
+| Zengin API v1.5 (statistics, vehicles/{plate}, events/{id}, export, heatmap) | ✅ Tamamlandı |
+| Plaka OCR — çok-varyant + konsensüs | ✅ Tamamlandı |
+| **Plaka tespiti** — YOLO11n oto-indirme + siyah-çerçeve crop + araç-id takibi | ✅ Tamamlandı (7 Haz) |
+| **Plaka crop** — `looks_like_plate` geçidi (saçma bölge eleme) + `refine_to_frame` | ✅ Tamamlandı (7 Haz) |
+| Metrik hız oto-kalibrasyonu (ppm/homografi/VP) | ✅ Tamamlandı |
+| QoD eval — gerçek video ~%43 bant tasarrufu (şartname %40 kriteri ✓) | ✅ Tamamlandı |
 | CAMARA env vars (mock→gerçek geçiş altyapısı) | ✅ Tamamlandı |
-| Gerçek plaka OCR karanlık sahne iyileştirmesi | 🔄 Faz 4 |
+| Plaka OCR Katman 3 (PaddleOCR fallback, video_3 iyileştirmesi) | 🔄 Faz 4b |
 | Sürücü davranışı gerçek test (MediaPipe sahne testi) | 🔄 Faz 5 |
 | Hız kalibrasyonu (saha referansı) | 🔄 Faz 6 |
-| QoD eval kanıtı (Normal vs Kritik bant verimliliği raporu) | 🔄 Faz 7 |
 | Fine-tune (TOGG/komite verisi) | ⏳ Komiteye bağlı — Faz 8 |
 
 Detaylı ilerleme ve karar günlüğü: [`ai/PROGRESS.md`](ai/PROGRESS.md)
@@ -180,8 +182,10 @@ teknofest-prototip/
 │
 ├── ai/                  🤖 YZ çıkarım hattı
 │   ├── detector.py          YOLOv8 (gerçek) / mock dedektör
-│   ├── lp_detector.py       Plaka tespiti (HuggingFace + CV fallback)
-│   ├── plate_ocr.py         Plaka OCR + konsensüs (EasyOCR + Tesseract yedek)
+│   ├── lp_detector.py       Plaka tespiti (YOLO11n oto-indirme + CV fallback)
+│   ├── plate_crop.py        Siyah-çerçeve takip crop + deskew + likeness geçidi
+│   ├── plate_tracker.py     Araç-id'ye bağlı plaka kararlılığı (ttl ile prune)
+│   ├── plate_ocr.py         Plaka OCR + konsensüs (EasyOCR, çok-varyant)
 │   ├── driver_state.py      MediaPipe EAR/PERCLOS + sürücü/yolcu ROI ayrımı
 │   ├── speed.py             Kalibrasyonsuz bbox-tabanlı hız
 │   ├── risk.py              Risk skor motoru (0–100)
@@ -225,7 +229,7 @@ teknofest-prototip/
 │   ├── camera_client.py     Masaüstü kamera istemcisi
 │   └── smoke_real_model.py  Gerçek model duman testi
 │
-├── tests/               ✅ 248 pytest testi (25 dosya, mock modda çalışır)
+├── tests/               ✅ 308 pytest testi (27 dosya, mock modda çalışır)
 ├── eval/                📊 Doğruluk değerlendirmesi
 │   ├── evaluate.py          Normal vs Kritik + bant verimliliği
 │   └── real_smoke.py        Gerçek-mod pipeline duman testi

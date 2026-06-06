@@ -8,25 +8,28 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 
 ---
 
-## 1. Mevcut Durum (son güncelleme: 2026-06-06)
+## 1. Mevcut Durum (son güncelleme: 2026-06-07)
 
 **Genel:**
 - Prototip repo **temel alındı**; uzak `cleoanka/teknofest-prototip` ile senkron (K7 akışı).
-- YZ hattı **uçtan uca çalışıyor**: mock (73 test yeşil) **ve** gerçek GPU (CUDA torch + YOLOv8) doğrulandı.
+- YZ hattı **uçtan uca çalışıyor**: mock (**308 test yeşil**) **ve** gerçek GPU (MPS/CUDA + YOLOv8 + plaka modeli) doğrulandı.
 - Eğitim/veri hattı **kodlandı ve test edildi** (aşağıdaki modüller).
 
 **Hazır olan YZ modülleri:**
-- `detector` (YOLOv8 gerçek/mock), `tracking` (IOU), `speed` (bbox-alan), `plate_ocr`
-  (çok-varyant + konsensüs), `driver_state` (EAR/PERCLOS + ROI), `risk` (ağırlıklı),
-  `qod_trigger` (A–E motoru), `pipeline` (orkestratör), `schema` (kontrat).
+- `detector` (YOLOv8 gerçek/mock), `tracking` (IOU), `speed` (bbox-alan + metrik kalibrasyon),
+  `plate_ocr` (çok-varyant + konsensüs), `plate_crop` (siyah-çerçeve takip + deskew),
+  `plate_tracker` (araç-id'ye bağlı plaka kararlılığı), `lp_detector` (YOLO11n oto-indirme),
+  `driver_state` (EAR/PERCLOS + ROI), `risk` (ağırlıklı), `qod_trigger` (A–E motoru),
+  `pipeline` (orkestratör), `schema` (kontrat), `calibration` (metrik hız oto-kalibrasyonu).
 - **Eğitim/veri araçları (6 Haz):** `training/prepare_dataset` (COCO→YOLO + audit + verify),
   `training/train` (müfredat + iki kademe + export + dry-run), `training/fetch_data` (+ `sources.json`
   manifest), `eval/real_smoke` (gerçek-mod duman). Detay: Faz Durumu ve §5.
 
-**Henüz YOK:**
-- Eğitilmiş özel model (sadece COCO-pretrained / mock).
+**Henüz YOK / Devam Eden:**
+- Eğitilmiş özel model (sadece COCO-pretrained + plaka-dedektör; komite verisi bekleniyor).
 - Gerçek CAMARA 5G (mock).
-- Saha hız kalibrasyonu.
+- Saha hız kalibrasyonu (referans mesafe ölçümü).
+- OCR Katman 3 iyileştirmesi (PaddleOCR fallback, video_3 doğruluğu).
 - ~~Windows/CUDA üzerinde doğrulanmış çalıştırma~~ → **YAPILDI** (2026-06-06, bkz. Faz 2/3).
 
 ---
@@ -40,10 +43,14 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 - **Faz 3 — Gerçek YOLOv8 + FPS ölçümü** ✓ MİNİ (2026-06-06) — coco8 ile **gerçek GPU eğitimi `train.py`
   üzerinden uçtan uca koştu** (3 epoch, best.pt üretildi, test→val geri-düşüşü çalıştı). **yolov8n: 72.7 FPS**
   (RTX 4070, imgsz 640) → plan hedefi "Normal mod >25 FPS" ✓. 3 saha/test videosuyla ölçüm → BEKLEYEN (veri gelince).
-- **Faz 4 — Plaka OCR gerçek (EasyOCR + GPU)** → BEKLEYEN
+- **Faz 4a — Plaka tespiti/crop/takip iyileştirmesi** ✓ (2026-06-07) — `plate_crop`, `plate_tracker`,
+  `lp_detector` (morsetechlab YOLO11n oto-indirme), pipeline Blok D yeniden yazıldı. Gerçek MPS'de
+  video_1/2 üzerinde `34TC8532` doğru ve kararlı. **308 test yeşil** (15 yeni eklendi). R7 kapandı.
+- **Faz 4b — Plaka OCR kalitesi (EasyOCR Katman 3 + PaddleOCR fallback)** → BEKLEYEN (video_3 iyileştirmesi)
 - **Faz 5 — Sürücü davranışı (telefon gerçek + yorgunluk denemesi)** → BEKLEYEN
 - **Faz 6 — Hız kalibrasyonu** → BEKLEYEN
-- **Faz 7 — QoD doğrulama (eval: Normal vs Kritik + bant verimliliği)** → BEKLEYEN
+- **Faz 7 — QoD doğrulama (eval: Normal vs Kritik + bant verimliliği)** ✓ MİNİ (2026-06-06) — gerçek
+  video üzerinde ~%43 bant tasarrufu (şartname %40 kriteri sağlandı, `eval/qod_video.py`).
 - **Faz 8 — Fine-tune (komite verisi gelince)** → BEKLEYEN
   - *(2026-06-05)* Eğitim **planı dokümante edildi** → `ai/plan.md`: sıfır etiketten açık kaynak veriyle
     geniş eğitim stratejisi (ne / nasıl / hangi kaynaklardan) + donanım yol haritası. Henüz eğitim koşulmadı.
