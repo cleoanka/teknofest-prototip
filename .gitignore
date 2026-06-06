@@ -35,5 +35,7 @@ eval_perclass.log
 supplement.log
 v1_*.log
 types_*.log
+qod_*.log
+eval_real.log
 # Geçici (commit'lenmeyen) yardımcı
 eval/_perclass_tmp.py
