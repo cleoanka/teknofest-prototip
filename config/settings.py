@@ -154,6 +154,16 @@ class Settings(BaseSettings):
     speed_calibration_k: float = Field(default=900.0)        # saha kalibrasyonu ile ayarlanır
     speed_limit_kmh: float = Field(default=50.0)
 
+    # Plaka YOLO dedektörü
+    lp_model_path: str = Field(default="")        # LP_MODEL_PATH → yerel .pt yolu (öncelik 1)
+    lp_hf_download: bool = Field(default=False)   # LP_HF_DOWNLOAD → HuggingFace opt-in
+    lp_conf: float = Field(default=0.20)          # YOLO eşiği (araç crop'unda düşük olabilir)
+    lp_mock: bool = Field(default=False)          # LP_MOCK → CI/test için LP atla
+
+    # Türk plakası fiziksel boyutları — mesafe kalibrasyonu için sabit (mm)
+    plate_real_width_mm: float = Field(default=520.0)   # standart araç plakası
+    plate_real_height_mm: float = Field(default=112.0)
+
     # Sunucu
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)

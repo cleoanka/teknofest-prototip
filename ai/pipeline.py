@@ -4,7 +4,12 @@ Uçtan uca çıkarım hattı.
 Blok A: Araç + araç içi nesne tespiti (YOLOv8)
 Blok B: Takip (track_id, bbox büyüme, swerving)
 Blok C: Hız tahmini
-Blok D: Plaka tespiti (LP dedektör → OCR)  — araçtan bağımsız çalışır
+Blok D: İki aşamalı plaka tespiti
+           Aşama 1 → araç crop al (padding %5)
+           Aşama 2 → LP dedektör SADECE araç crop üzerinde çalışır
+           → false positive (trafik levhası, duvar) tamamen önlenir
+           → koordinat dönüşümü ile full-frame bbox hesaplanır
+           → plate_pixel_width → mesafe kalibrasyonu (52cm / px_w)
 Blok E: Sürücü durumu (MediaPipe + sürücü/yolcu ROI ayrımı)
 Blok F: Risk skoru
 """
@@ -44,39 +49,37 @@ def _dominant_color(crop: np.ndarray) -> Optional[str]:
     return "mavi"
 
 
-def _nearest_plate_to_vehicle(vehicle_bbox: BBox, plate_bboxes) -> Optional[BBox]:
-    """Birden fazla plaka varsa araç merkezine en yakın plakayı seç."""
-    if not plate_bboxes:
-        return None
-    vcx, vcy = vehicle_bbox.cx, vehicle_bbox.cy
-    best, best_dist = None, float("inf")
-    for pb in plate_bboxes:
-        dx = pb.cx - vcx
-        dy = pb.cy - vcy
-        d = (dx * dx + dy * dy) ** 0.5
-        if d < best_dist:
-            best, best_dist = pb, d
-    # Plakanın araç bbox'ının içinde veya yakınında olmasını kontrol et
-    margin = max(vehicle_bbox.area ** 0.5 * 0.5, 50)
-    if best_dist > margin and best is not None:
-        # Araçtan çok uzaksa plakayla eşleştirme (başka araca ait olabilir)
-        in_veh = (best.x1 >= vehicle_bbox.x1 - margin and best.x2 <= vehicle_bbox.x2 + margin)
-        if not in_veh:
-            return None
-    return best
+def _vehicle_crop(
+    frame: np.ndarray,
+    vehicle_bbox: BBox,
+    padding: float = 0.05,
+) -> Tuple[Optional[np.ndarray], Tuple[int, int]]:
+    """
+    Araç bbox'ından %5 padding'li crop alır.
+    Dönüş: (crop, (x_offset, y_offset)) — lokal koordinatları full-frame'e çevirmek için.
+    """
+    fh, fw = frame.shape[:2]
+    vw = vehicle_bbox.x2 - vehicle_bbox.x1
+    vh = vehicle_bbox.y2 - vehicle_bbox.y1
+    x1 = max(0, int(vehicle_bbox.x1 - padding * vw))
+    y1 = max(0, int(vehicle_bbox.y1 - padding * vh))
+    x2 = min(fw, int(vehicle_bbox.x2 + padding * vw))
+    y2 = min(fh, int(vehicle_bbox.y2 + padding * vh))
+    crop = frame[y1:y2, x1:x2]
+    return (crop if crop.size > 0 else None), (x1, y1)
 
 
 def _fallback_plate_crop(frame: np.ndarray, vehicle_bbox: BBox) -> Optional[np.ndarray]:
-    """LP dedektör plaka bulamazsa araç bbox alt bölgesini kırp."""
+    """LP dedektör başarısız olursa araç bbox alt %50'sini OCR'a gönderir."""
     if frame is None or frame.size == 0:
         return None
     v = vehicle_bbox
-    w = v.x2 - v.x1
-    h = v.y2 - v.y1
-    px1 = int(v.x1 + 0.05 * w)
-    px2 = int(v.x2 - 0.05 * w)
-    py1 = int(v.y1 + 0.50 * h)
-    py2 = int(v.y2 - 0.01 * h)
+    vw = v.x2 - v.x1
+    vh = v.y2 - v.y1
+    px1 = int(v.x1 + 0.05 * vw)
+    px2 = int(v.x2 - 0.05 * vw)
+    py1 = int(v.y1 + 0.50 * vh)
+    py2 = int(v.y2 - 0.01 * vh)
     crop = frame[max(0, py1):py2, max(0, px1):px2]
     return crop if crop.size > 0 else None
 
@@ -88,7 +91,7 @@ class Pipeline:
         self.tracker = IOUTracker()
         self.plate_reader = PlateReader(mode=self.s.ai_mode)
         self.driver = DriverMonitor(mode=self.s.ai_mode)
-        self.lp_detector = get_lp_detector()
+        self.lp_detector = get_lp_detector(mode=self.s.ai_mode)
         self._last_t = time.time()
         self._frame_id = 0
 
@@ -137,13 +140,14 @@ class Pipeline:
             vehicle.bbox = pv.bbox
 
             if frame is not None and frame.size:
-                x1, y1, x2, y2 = [int(max(0, v)) for v in (pv.bbox.x1, pv.bbox.y1, pv.bbox.x2, pv.bbox.y2)]
-                vehicle.color = _dominant_color(frame[y1:y2, x1:x2])
+                x1i, y1i = int(max(0, pv.bbox.x1)), int(max(0, pv.bbox.y1))
+                x2i, y2i = int(max(0, pv.bbox.x2)), int(max(0, pv.bbox.y2))
+                vehicle.color = _dominant_color(frame[y1i:y2i, x1i:x2i])
 
             # Blok C — hız
             vehicle.speed_kmh = estimate_speed(primary_track, w, h, fps, dt)
 
-            # Swerving (zigzag tespiti)
+            # Swerving
             if primary_track:
                 vehicle.swerving = primary_track.is_swerving()
 
@@ -151,52 +155,68 @@ class Pipeline:
             vehicle.driver_bbox = DriverMonitor.driver_roi(vehicle.bbox, (h, w))
             vehicle.passenger_bbox = DriverMonitor.passenger_roi(vehicle.bbox, (h, w))
 
-        # Blok D — plaka tespiti (LP dedektörden bağımsız, kritik profilde)
+        # Blok D — İki aşamalı plaka tespiti (kritik profilde)
         if critical and frame is not None and frame.size:
-            # LP dedektör tam çerçevede çalışır (araç yoksa bile plaka bulunabilir)
-            plate_bboxes = self.lp_detector.detect(frame, conf=0.20)
+            selected_plate_bbox: Optional[BBox] = None
+            plate_crop: Optional[np.ndarray] = None
 
-            plate_crop = None
-            selected_plate_bbox = None
+            if vehicle.bbox:
+                # Aşama 1: Araç crop (araç dışı false positive'leri eliyor)
+                veh_crop, (ox, oy) = _vehicle_crop(frame, vehicle.bbox)
 
-            if plate_bboxes:
-                if vehicle.bbox:
-                    selected_plate_bbox = _nearest_plate_to_vehicle(vehicle.bbox, plate_bboxes)
-                    if selected_plate_bbox is None:
-                        # TOGG gibi durum: COCO yanlış araç bbox'ı veriyor,
-                        # LP dedektör gerçek plaka konumunu buluyor → plakayı yine de kullan
-                        selected_plate_bbox = max(plate_bboxes, key=lambda b: b.area)
-                else:
-                    # Araç yoksa en büyük plakayı al
-                    selected_plate_bbox = max(plate_bboxes, key=lambda b: b.area)
+                if veh_crop is not None and veh_crop.size > 0:
+                    # Aşama 2: LP dedektör SADECE araç crop üzerinde
+                    local_bboxes = self.lp_detector.detect(veh_crop)
 
-                if selected_plate_bbox:
-                    x1 = max(0, int(selected_plate_bbox.x1))
-                    y1 = max(0, int(selected_plate_bbox.y1))
-                    x2 = min(w, int(selected_plate_bbox.x2))
-                    y2 = min(h, int(selected_plate_bbox.y2))
-                    plate_crop = frame[y1:y2, x1:x2]
-                    if plate_crop.size == 0:
+                    if local_bboxes:
+                        best_local = max(local_bboxes, key=lambda b: b.area)
+
+                        # Lokal koordinat → full-frame koordinat
+                        selected_plate_bbox = BBox(
+                            x1=best_local.x1 + ox, y1=best_local.y1 + oy,
+                            x2=best_local.x2 + ox, y2=best_local.y2 + oy,
+                        )
+                        # Plate crop: araç crop üzerindeki piksel kalitesi daha iyi
+                        lx1 = max(0, int(best_local.x1))
+                        ly1 = max(0, int(best_local.y1))
+                        lx2 = min(veh_crop.shape[1], int(best_local.x2))
+                        ly2 = min(veh_crop.shape[0], int(best_local.y2))
+                        plate_crop = veh_crop[ly1:ly2, lx1:lx2]
+                        if plate_crop.size == 0:
+                            plate_crop = None
+            else:
+                # TOGG senaryosu: COCO araç bbox veremiyor → full frame'de ara
+                full_bboxes = self.lp_detector.detect(frame)
+                if full_bboxes:
+                    best_fb = max(full_bboxes, key=lambda b: b.area)
+                    selected_plate_bbox = best_fb
+                    fbx1 = max(0, int(best_fb.x1))
+                    fby1 = max(0, int(best_fb.y1))
+                    fbx2 = min(w, int(best_fb.x2))
+                    fby2 = min(h, int(best_fb.y2))
+                    plate_crop = frame[fby1:fby2, fbx1:fbx2]
+                    if plate_crop is not None and plate_crop.size == 0:
                         plate_crop = None
 
-            # LP dedektör plaka bulamazsa araç bbox alt bölgesini fallback
+            # Fallback: LP dedektör plaka bulamazsa araç alt bölgesi
             if plate_crop is None and vehicle.bbox:
                 plate_crop = _fallback_plate_crop(frame, vehicle.bbox)
 
             if plate_crop is not None:
                 vehicle.plate = self.plate_reader.read(plate_crop)
-                if selected_plate_bbox:
-                    vehicle.plate_bbox = selected_plate_bbox
 
-            # LP dedektörden plaka bulundu ama araç yoksa vehicle.present=True yap
-            if not vehicle.present and plate_bboxes:
+            if selected_plate_bbox is not None:
+                vehicle.plate_bbox = selected_plate_bbox
+                vehicle.plate_pixel_width = round(selected_plate_bbox.width, 1)
+
+            # TOGG: araç yoksa ama plaka bulunduysa present=True
+            if not vehicle.present and selected_plate_bbox:
                 vehicle.present = True
                 vehicle.vtype = "vehicle"
-                vehicle.plate_bbox = selected_plate_bbox
 
         result.vehicle = vehicle
 
-        # Blok E — sürücü durumu (sürücü/yolcu ROI ayrımı)
+        # Blok E — sürücü durumu
         result.driver = self.driver.assess(
             frame, detections, profile, vehicle_bbox=vehicle.bbox
         )
@@ -207,7 +227,6 @@ class Pipeline:
         result.latency_ms = round((time.time() - t0) * 1000, 1)
         result.fps = round(1.0 / dt, 1)
 
-        # QoD tetik bağlamı
         ctx = TriggerContext(
             bbox_growth=primary_track.area_growth_ratio() if primary_track else 0.0,
             vehicle_present=vehicle.present,
