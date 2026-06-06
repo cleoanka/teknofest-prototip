@@ -25,4 +25,13 @@ server.out.log
 
 # Eğitim verisi ve geçici değerlendirme çıktıları (büyük; yeniden üretilebilir)
 datasets/
+models/
 eval_perclass.log
+# Eğitim/değerlendirme geçici logları
+*_train.log
+*_perclass.log
+supplement.log
+v1_*.log
+types_*.log
+# Geçici (commit'lenmeyen) yardımcı
+eval/_perclass_tmp.py

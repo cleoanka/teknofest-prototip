@@ -154,9 +154,28 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
   yapar (ultralytics `datasets_dir` import-anı önbelleğini atlar; eskiden gerçek eğitim çökerdi).
 - Gerçek-mod doğrulama: pipeline v0 modelini yükleyip çıkarım yapıyor (person tespiti OK).
 
+### ✅ Tamamlanan (6 Haziran — taksonomi + tip-ayrımlı model)
+- **K-008 derinleşti:** "nazik" reçete (çözük omurga + lr0=0.002 + cos_lr) bile düştü (0.49→0.30) →
+  asıl ilaç **donuk omurga**. `train.py`'ye `--gentle` (hafif aug+lr0+cos_lr) ve `--freeze N` knob'ları
+  eklendi (testli). Bulgu: küçük benzer-alan veride omurgayı donuk tut, başlığı eğit.
+- **ARAÇ TİPİ AYRIMI (şartname).** Şema zaten `vehicle.vtype` taşıyordu; backend `vtype` kolonu hazırdı.
+  Taksonomi **2 uzaya** ayrıldı: (1) `TARGET_CLASSES` = modelin 11 sınıfı (car/minibus/bus/truck/motorcycle
+  + 6 diğer); (2) şema etiketi `vehicle` + `vtype`. Yeni: `COCO_TO_TARGET` (eğitim, birleştirme yok) ve
+  `CANONICAL_MAP` (çıkarım: alt-tip → ("vehicle", vtype)). detector/pipeline/data.yaml/sources.json + testler
+  güncellendi. **Backend/şema kontratı DEĞİŞMEDİ** (vehicle+vtype) → 251 test yeşil.
+- **Tip-ayrımlı model `yg_types_v1`** (yolov8s, donuk omurga, COCO val2017 11-sınıf):
+
+  | car | bus | truck | motorcycle | person | phone | ALL |
+  |---|---|---|---|---|---|---|
+  | .592 | .593 | .430 | .674 | .751 | .310 | **.559** |
+
+  → `models/yolguvenligi_types_v1.pt`, `.env` `YOLO_MODEL_CRITICAL`. Pipeline `vehicle.vtype` üretiyor (doğrulandı).
+  Zayıf: truck (415 kutu), phone (262, küçük). **minibus + license_plate/cigarette/seatbelt/headphone = 0 veri.**
+
 ### ⏭️ Sıradaki (öncelik sırası)
-1. **v1 eğitim reçetesi (bulgu K-008'i çöz):** ya hafif augmentation + düşük lr + daha çok freeze ile
-   ısınmadan ileri git, ya da daha çok veri (BDD100K/daha fazla COCO) + uzun schedule. Hedef: ana aşama > 0.602.
+0. **Minibüs verisi (Roboflow):** anahtar çalışıyor; iyi bir minibüs içeren set bul (fypyolo adayı kötüydü:
+   152 imaj, dengesiz) → sınıfları TARGET'a remap et → datasets/yolguvenligi'ye birleştir → yeniden eğit.
+1. **truck/phone'u güçlendir:** daha çok COCO (train2017) veya BDD100K ile bu zayıf sınıfları besle.
 2. **`eval/evaluate.py` — QoD %40 kanıtı (plan Bölüm 8):** mock kanıt ÇALIŞIYOR (cabin 0→73, bant tasarrufu
    ~%22). Eksik: gerçek `best.pt` v0 ile çalıştırıp sayıyı tazele + per-sınıf mAP'i rapora bağla.
 3. **Faz 4 — Gerçek plaka OCR:** `pip install easyocr` (GPU) → gerçek-mod dumanında plate gerçek;
