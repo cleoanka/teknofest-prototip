@@ -20,3 +20,15 @@ export interface FrameResult {
   detections: Detection[]; vehicle: Vehicle; driver: DriverState;
   risk: RiskAssessment; qod: QoDStatus; latency_ms: number; fps: number;
 }
+
+// /api/events endpoint'inden dönen düzleştirilmiş olay kaydı
+export interface StoredEvent {
+  plate: string | null;
+  vtype: string | null;
+  speed_kmh: number | null;
+  risk_score: number;
+  risk_level: string;
+  factors: string;   // virgülle ayrılmış liste
+  mode: "NORMAL" | "CRITICAL";
+  ts: number;        // unix timestamp (saniye)
+}
