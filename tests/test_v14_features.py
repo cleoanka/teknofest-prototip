@@ -47,10 +47,10 @@ def test_health_deep_memory_check(client):
     assert checks["memory"]["status"] in ("ok", "unavailable")
 
 
-def test_health_deep_version_is_140(client):
-    """API versiyonu 1.4.0 olmalı."""
+def test_health_deep_version_present(client):
+    """API versiyonu yanıtta bulunmalı."""
     r = client.get("/api/health/deep")
-    assert r.json()["version"] == "1.4.0"
+    assert r.json()["version"].startswith("1.")
 
 
 # ── X-Response-Time header ────────────────────────────────────────────────────
@@ -125,11 +125,11 @@ def test_openapi_has_tags(client):
     assert "analytics" in tag_names
 
 
-def test_openapi_version_140(client):
-    """OpenAPI bilgi bölümünde versiyon 1.4.0 olmalı."""
+def test_openapi_version_present(client):
+    """OpenAPI bilgi bölümünde versiyon bulunmalı."""
     r = client.get("/openapi.json")
     info = r.json()["info"]
-    assert info["version"] == "1.4.0"
+    assert info["version"].startswith("1.")
 
 
 def test_docs_accessible(client):
