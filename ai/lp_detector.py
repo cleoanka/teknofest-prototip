@@ -255,39 +255,49 @@ class LicensePlateDetector:
     def available(self) -> bool:
         return True  # Mock dahil her zaman çalışır ([] döner)
 
+    def _resolve_conf(self, conf: Optional[float]) -> float:
+        if conf is not None:
+            return conf
+        try:
+            from config.settings import get_settings
+            return get_settings().lp_conf
+        except Exception:
+            return 0.20
+
     def detect(self, frame: np.ndarray, conf: Optional[float] = None) -> List[BBox]:
         """
         frame: araç crop (tercih) veya full frame.
-        conf: None ise settings.lp_conf kullanılır (varsayılan 0.20).
+        conf: None ise settings.lp_conf kullanılır (varsayılan 0.25).
+        """
+        return [b for b, _ in self.detect_with_conf(frame, conf=conf)]
+
+    def detect_with_conf(
+        self, frame: np.ndarray, conf: Optional[float] = None
+    ) -> "List[Tuple[BBox, float]]":
+        """Tespit sonuçlarını (bbox, model_confidence) çifti olarak döndürür.
+
+        CV fallback kullanılırsa confidence=0.50 döner (model güvencesi yok).
         """
         if self._mock or frame is None or frame.size == 0:
             return []
 
-        _conf: float
-        if conf is not None:
-            _conf = conf
-        else:
-            try:
-                from config.settings import get_settings
-                _conf = get_settings().lp_conf
-            except Exception:
-                _conf = 0.20
+        _conf = self._resolve_conf(conf)
 
         if self._using_model and self._model is not None:
             try:
                 results = self._model.predict(frame, conf=_conf, verbose=False)[0]
-                bboxes: List[BBox] = []
+                out: "List[Tuple[BBox, float]]" = []
                 if results.boxes:
                     for b in results.boxes:
                         x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]
                         if (x2 - x1) < 20 or (y2 - y1) < 8:
                             continue
-                        bboxes.append(BBox(x1=x1, y1=y1, x2=x2, y2=y2))
-                return bboxes
+                        out.append((BBox(x1=x1, y1=y1, x2=x2, y2=y2), float(b.conf[0])))
+                return out
             except Exception:
                 pass
 
-        return _detect_cv(frame)
+        return [(b, 0.50) for b in _detect_cv(frame)]
 
     def detect_best(self, frame: np.ndarray, conf: Optional[float] = None) -> Optional[BBox]:
         bboxes = self.detect(frame, conf=conf)
