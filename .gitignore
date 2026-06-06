@@ -39,3 +39,9 @@ qod_*.log
 eval_real.log
 # Geçici (commit'lenmeyen) yardımcı
 eval/_perclass_tmp.py
+speed_eval.log
+
+# Claude Code yerel araçları/lock (kişisel — paylaşılmaz)
+.claude/scheduled_tasks.lock
+.claude/agents/
+.claude/skills/
