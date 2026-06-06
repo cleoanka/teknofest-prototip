@@ -39,6 +39,9 @@
 | JSON loglama | ✅ | `_JsonFormatter` — her log satırı tek JSON satırı; prod için |
 | OpenAPI tag açıklamaları | ✅ | system/events/vehicles/analytics/camara/auth/tools |
 | Swagger UI özelleştirme | ✅ | tryItOutEnabled, filter, persistAuthorization, tag gizleme |
+| /api/events sort_by/sort_dir | ✅ | ts/risk_score/speed_kmh/id × asc/desc; whitelist SQL injection koruması |
+| /api/vehicles offset pagination | ✅ | offset param + X-Total-Count (benzersiz plaka sayısı) header |
+| /api/version | ✅ | Python versiyonu, platform, ai_mode, camara_mode, uptime_s |
 
 ---
 
@@ -98,7 +101,7 @@ Filtre parametrelerini destekliyor (from_ts, to_ts, level, vtype).
 ```
 Son çalıştırma: 2026-06-06
 Durum: TÜM TESTLER YEŞİL ✅
-Toplam test: 181 (73 eski → 181 yeni)
+Toplam test: 198 (73 eski → 198 yeni)
 Ortam: AI_MODE=mock, DB=:memory:
 ```
 
@@ -122,6 +125,7 @@ Ortam: AI_MODE=mock, DB=:memory:
 | test_statistics.py | 6 | /api/statistics doğruluğu |
 | test_training_*.py | 35 | Eğitim/veri araçları |
 | test_v14_features.py | 19 | health/deep, X-Response-Time, WS auth, OpenAPI, JSON log |
+| test_sort_pagination_version.py | 17 | events sort, vehicles pagination, /api/version |
 | test_ws_e2e.py | 4 | WS ingest/detections/broadcast uçtan uca |
 
 ---
