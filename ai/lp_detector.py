@@ -17,7 +17,9 @@ import numpy as np
 
 from ai.schema import BBox
 
-# HuggingFace'de denenecek modeller (sırayla)
+# HuggingFace'de denenecek modeller (sırayla).
+# NOT: Varsayılan olarak KAPALI — bu repo'ların çoğu kaldırıldı/gated (401).
+# Sadece LP_HF_DOWNLOAD=1 ortam değişkeni ile denenir.
 _HF_REPOS = [
     ("keremberke/yolov8n-license-plate-detection", "best.pt"),
 ]
@@ -143,35 +145,64 @@ class LicensePlateDetector:
         self._try_load_model()
 
     def _try_load_model(self):
+        """
+        Yerel bir plaka modeli varsa yükler; yoksa CV fallback'e düşer.
+
+        Öncelik sırası:
+          1) LP_MODEL_PATH ortam değişkeni (açık yerel .pt yolu)
+          2) Önceden önbelleklenmiş ~/.cache/teknofest/lp_model.pt
+          3) HuggingFace indirmesi — SADECE LP_HF_DOWNLOAD=1 ise (varsayılan kapalı;
+             açık plaka modeli repo'larının çoğu kaldırıldı/gated → 401).
+
+        Hiçbiri yoksa ağ çağrısı yapılmaz; doğrudan OpenCV tabanlı CV fallback kullanılır.
+        """
         try:
             from ultralytics import YOLO
-            from huggingface_hub import hf_hub_download
+        except Exception as e:
+            print(f"[LP Detector] ultralytics yok → CV fallback: {type(e).__name__}")
+            return
 
-            cache_dir = os.path.expanduser("~/.cache/teknofest")
-            cache_path = os.path.join(cache_dir, "lp_model.pt")
+        cache_dir = os.path.expanduser("~/.cache/teknofest")
+        cache_path = os.path.join(cache_dir, "lp_model.pt")
 
-            if not os.path.exists(cache_path):
+        # 1) Açık yerel model yolu
+        env_path = os.environ.get("LP_MODEL_PATH", "").strip()
+        if env_path:
+            if os.path.exists(env_path):
+                cache_path = env_path
+            else:
+                print(f"[LP Detector] LP_MODEL_PATH bulunamadı: {env_path}")
+
+        # 2) HF indirmesi yalnızca opt-in (LP_HF_DOWNLOAD=1)
+        elif not os.path.exists(cache_path) and os.environ.get("LP_HF_DOWNLOAD") == "1":
+            try:
+                from huggingface_hub import hf_hub_download
+                import shutil
                 os.makedirs(cache_dir, exist_ok=True)
                 for repo_id, filename in _HF_REPOS:
                     try:
                         print(f"[LP Detector] İndiriliyor: {repo_id}/{filename}")
-                        model_path = hf_hub_download(repo_id=repo_id, filename=filename)
-                        import shutil
-                        shutil.copy(model_path, cache_path)
+                        dl = hf_hub_download(repo_id=repo_id, filename=filename)
+                        shutil.copy(dl, cache_path)
                         print(f"[LP Detector] Önbelleklendi: {cache_path}")
                         break
                     except Exception as e:
                         print(f"[LP Detector] {repo_id} başarısız: {type(e).__name__}")
                         continue
+            except Exception as e:
+                print(f"[LP Detector] HF indirme atlandı: {type(e).__name__}")
 
-            if os.path.exists(cache_path):
+        # 3) Model dosyası varsa yükle
+        if os.path.exists(cache_path):
+            try:
                 self._model = YOLO(cache_path)
                 self._using_model = True
-                print("[LP Detector] YOLOv8 model aktif.")
-            else:
-                print("[LP Detector] Model indirilemedi → CV fallback aktif.")
-        except Exception as e:
-            print(f"[LP Detector] Başlatma hatası → CV fallback: {type(e).__name__}: {e}")
+                print(f"[LP Detector] YOLOv8 model aktif: {cache_path}")
+                return
+            except Exception as e:
+                print(f"[LP Detector] Model yüklenemedi → CV fallback: {type(e).__name__}")
+
+        print("[LP Detector] Yerel model yok → CV fallback aktif (ağ çağrısı yok).")
 
     @property
     def available(self) -> bool:
