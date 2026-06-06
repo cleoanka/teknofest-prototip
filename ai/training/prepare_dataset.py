@@ -31,7 +31,7 @@ import os
 from collections import Counter
 from typing import Dict, List, Optional, Tuple
 
-from config.settings import TARGET_CLASSES, COCO_TO_CANONICAL
+from config.settings import TARGET_CLASSES, COCO_TO_TARGET
 
 # Kabul edilen görüntü uzantıları (görüntü↔etiket eşleştirmede kullanılır).
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
@@ -91,13 +91,13 @@ def coco_to_yolo(
 ) -> Tuple[Dict[str, List[YoloBox]], Counter, int]:
     """COCO instances sözlüğünü dosya-bazlı YOLO kutularına çevirir (saf fonksiyon, IO yok).
 
-    Eşleme zinciri: COCO kategori adı → kanonik ad (class_map) → indeks (target_classes).
+    Eşleme zinciri: COCO kategori adı → TARGET adı (class_map) → indeks (target_classes).
     Haritada olmayan veya hedef sınıflarda bulunmayan kategoriler **atlanır** (geçersiz
     sınıf üretmektense kutuyu düşürmek daha güvenli — birleşik şema bozulmaz).
 
     Dönüş: (dosya_adı -> [YoloBox...], sınıf_adı sayacı, atlanan_kutu_sayısı)
     """
-    class_map = class_map if class_map is not None else COCO_TO_CANONICAL
+    class_map = class_map if class_map is not None else COCO_TO_TARGET
     target_classes = target_classes if target_classes is not None else TARGET_CLASSES
     name_to_idx = {name: i for i, name in enumerate(target_classes)}
 

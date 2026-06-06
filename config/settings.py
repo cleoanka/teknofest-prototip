@@ -24,19 +24,61 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Tespit sınıfları (komite formatı gelince güncellenecek tek nokta)
 # ──────────────────────────────────────────────────────────────────────────────
 
-# COCO sınıf adı  ->  bizim kanonik sınıfımız.
-# Standart (eğitilmemiş) YOLOv8 COCO ile gelir; haritalama ile probleme uyarlıyoruz.
-COCO_TO_CANONICAL = {
-    "car": "vehicle",
-    "truck": "vehicle",
-    "bus": "vehicle",
-    "motorcycle": "vehicle",
+# ─── Sınıf taksonomisi — İKİ AYRI uzay ───────────────────────────────────────
+# (1) TARGET_CLASSES : MODELİN öğrendiği/çıkardığı sınıflar (data.yaml ile birebir).
+#     Araç alt-tipleri AYRI tutulur (şartname: araç tipi ayrımı — minibüs vb.).
+# (2) Şema/kanonik    : pipeline & backend'in gördüğü etiketler (vehicle, person, ...).
+#     Araç alt-tipleri tek 'vehicle' etiketine toplanır; ham tip vehicle.vtype olur.
+#     Böylece şema/backend kontratı (vehicle + vtype) hiç değişmez.
+
+# (1) Modelin sınıfları — eğitim indeksleri / data.yaml 'names' ile birebir, sıralı.
+TARGET_CLASSES = [
+    "car",           # 0  ┐
+    "minibus",       # 1  │ araç alt-tipleri (minibus COCO'da YOK → Türk verisinden)
+    "bus",           # 2  │
+    "truck",         # 3  │
+    "motorcycle",    # 4  ┘
+    "license_plate", # 5
+    "person",        # 6  (yolcu / sürücü)
+    "phone",         # 7
+    "cigarette",     # 8
+    "seatbelt",      # 9
+    "headphone",     # 10
+]
+
+# Araç alt-tipleri: pipeline bunları tek 'vehicle' nesnesine toplar, tipi vtype'a yazar.
+VEHICLE_TYPES = ("car", "minibus", "bus", "truck", "motorcycle")
+
+# (2a) EĞİTİM verisi hazırlama: COCO kategori adı → TARGET_CLASSES adı (birleştirme YOK).
+#      COCO car/truck/bus/motorcycle ayrı kalır; minibus COCO'da yok (Türk verisinden gelir).
+COCO_TO_TARGET = {
+    "car": "car",
+    "truck": "truck",
+    "bus": "bus",
+    "motorcycle": "motorcycle",
     "person": "person",
     "cell phone": "phone",
-    # 'cigarette' COCO'da yok -> fine-tune ile eklenecek (training/data.yaml)
 }
 
-# Araç sınıfları (hız/plaka bu nesnelere bağlanır)
+# (2b) ÇIKARIM → şema: model/COCO sınıf adı → (şema_etiketi, vtype).
+#      Araç alt-tipleri 'vehicle'a toplanır (vtype=ham tip); diğer sınıflar kendileri.
+#      Hem fine-tune modelin (TARGET adları) hem stok COCO modelin (COCO adları) çıktısını karşılar.
+CANONICAL_MAP = {
+    "car":           ("vehicle", "car"),
+    "minibus":       ("vehicle", "minibus"),
+    "bus":           ("vehicle", "bus"),
+    "truck":         ("vehicle", "truck"),
+    "motorcycle":    ("vehicle", "motorcycle"),
+    "person":        ("person", None),
+    "phone":         ("phone", None),
+    "cell phone":    ("phone", None),    # stok COCO adı
+    "license_plate": ("license_plate", None),
+    "cigarette":     ("cigarette", None),
+    "seatbelt":      ("seatbelt", None),
+    "headphone":     ("headphone", None),
+}
+
+# Araç sınıfları (ŞEMA seviyesi — hız/plaka bu nesneye bağlanır). Detector 'vehicle' üretir.
 VEHICLE_CLASSES = {"vehicle"}
 
 # Araç içi / sürücü-davranışı nesneleri
@@ -44,17 +86,6 @@ CABIN_OBJECT_CLASSES = {"phone", "cigarette", "seatbelt", "headphone", "person"}
 
 # Sürücü durum bayrakları (pipeline tarafından üretilir)
 DRIVER_STATE_FLAGS = ["fatigue", "phone_use", "smoking", "no_seatbelt", "headphone"]
-
-# Nihai (fine-tune sonrası hedeflenen) sınıf listesi — training/data.yaml ile eşittir
-TARGET_CLASSES = [
-    "vehicle",        # 0
-    "license_plate",  # 1
-    "person",         # 2  (yolcu / sürücü)
-    "phone",          # 3
-    "cigarette",      # 4
-    "seatbelt",       # 5
-    "headphone",      # 6
-]
 
 
 # ──────────────────────────────────────────────────────────────────────────────

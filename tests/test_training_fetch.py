@@ -34,7 +34,7 @@ def test_license_status_whitelist():
 
 # ── Doğrulama ───────────────────────────────────────────────────────────────
 def test_validate_clean():
-    sources = [_src("a", ["vehicle"]), _src("b", ["phone"])]
+    sources = [_src("a", ["car"]), _src("b", ["phone"])]
     assert validate_sources(sources) == []
 
 
@@ -44,41 +44,41 @@ def test_validate_flags_unknown_class():
 
 
 def test_validate_flags_duplicate_and_bad_type():
-    sources = [_src("a", ["vehicle"]), _src("a", ["phone"], typ="ftp")]
+    sources = [_src("a", ["car"]), _src("a", ["phone"], typ="ftp")]
     errors = validate_sources(sources)
     assert any("tekrarlanan" in e for e in errors)
     assert any("bilinmeyen tür" in e for e in errors)
 
 
 def test_validate_flags_empty_license_and_location():
-    s = Source(name="x", type="roboflow", classes=["vehicle"], location="", license="")
+    s = Source(name="x", type="roboflow", classes=["car"], location="", license="")
     errors = validate_sources([s])
     assert any("lisans" in e for e in errors)
     assert any("konum" in e for e in errors)
 
 
 def test_validate_manifest_classes_mismatch():
-    errors = validate_sources([_src("a", ["vehicle"])], manifest_classes=["vehicle"])
+    errors = validate_sources([_src("a", ["car"])], manifest_classes=["car"])
     assert any("uyumsuz" in e for e in errors)
 
 
 # ── Kapsama / boşluk ────────────────────────────────────────────────────────
 def test_coverage_maps_classes_to_sources():
-    sources = [_src("a", ["vehicle", "person"]), _src("b", ["vehicle"])]
+    sources = [_src("a", ["car", "person"]), _src("b", ["car"])]
     cov = coverage(sources)
-    assert set(cov["vehicle"]) == {"a", "b"}
+    assert set(cov["car"]) == {"a", "b"}
     assert cov["person"] == ["a"]
 
 
 def test_missing_classes_detected():
-    sources = [_src("a", ["vehicle"])]
+    sources = [_src("a", ["car"])]
     miss = missing_classes(sources)
-    assert "vehicle" not in miss
+    assert "car" not in miss
     assert "headphone" in miss          # kaynağı yok → boşluk
 
 
 def test_find_source():
-    sources = [_src("a", ["vehicle"])]
+    sources = [_src("a", ["car"])]
     assert find_source(sources, "a").name == "a"
     assert find_source(sources, "yok") is None
 

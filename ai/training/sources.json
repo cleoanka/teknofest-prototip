@@ -1,14 +1,14 @@
 {
   "_aciklama": "Açık kaynak veri kaynakları manifesti (plan.md Bölüm 4 tablosunun makine-okunur hâli). Her kaynak hangi sınıf(lar)ı, nereden, hangi lisansla sağladığını bildirir. fetch_data.py bunu okur: list/coverage/validate (ağsız) ve fetch (gerçek indirme). JSON kullanıldı (PyYAML eklemekten kaçınmak için, bkz. PROGRESS K-007).",
-  "target_classes": ["vehicle", "license_plate", "person", "phone", "cigarette", "seatbelt", "headphone"],
+  "target_classes": ["car", "minibus", "bus", "truck", "motorcycle", "license_plate", "person", "phone", "cigarette", "seatbelt", "headphone"],
   "sources": [
     {
       "name": "coco-vehicle-person",
       "type": "coco_json",
-      "classes": ["vehicle", "person"],
+      "classes": ["car", "bus", "truck", "motorcycle", "person"],
       "location": "datasets/raw/coco/annotations/instances_train2017.json",
       "license": "CC-BY-4.0",
-      "notes": "COCO car/truck/bus/motorcycle -> vehicle; person -> person. prepare_dataset.coco ile dönüştür."
+      "notes": "COCO car/bus/truck/motorcycle AYRI sınıf (birleştirme yok); person -> person. build_coco_subset / prepare_dataset.coco ile dönüştür. minibus COCO'da YOK."
     },
     {
       "name": "coco-phone",
@@ -21,10 +21,18 @@
     {
       "name": "bdd100k-driving",
       "type": "http_zip",
-      "classes": ["vehicle", "person"],
+      "classes": ["car", "bus", "truck", "motorcycle", "person"],
       "location": "https://doc.bdd100k.com/download.html",
       "license": "BSD-3-Clause",
-      "notes": "~110K sürüş sahnesi (gündüz/gece/yağmur) — genelleme için kritik. Elle indir, sonra dönüştür."
+      "notes": "~110K sürüş sahnesi (gündüz/gece/yağmur) — genelleme için kritik. Araç tipleri ayrı. Elle indir, sonra dönüştür."
+    },
+    {
+      "name": "roboflow-tr-vehicles",
+      "type": "roboflow",
+      "classes": ["car", "minibus", "bus", "truck", "motorcycle"],
+      "location": "workspace/turkish-vehicles/1",
+      "license": "roboflow",
+      "notes": "Türk trafiği araç tipleri — minibüs/dolmuş için KRİTİK (COCO'da yok). ROBOFLOW_API_KEY gerekir; gerçek proje/sürümle güncelle."
     },
     {
       "name": "ccpd-plate",

@@ -31,7 +31,7 @@ import shutil
 from collections import Counter
 from typing import Dict, List
 
-from config.settings import COCO_TO_CANONICAL, TARGET_CLASSES
+from config.settings import COCO_TO_TARGET, TARGET_CLASSES
 from ai.training.prepare_dataset import coco_to_yolo, write_yolo_labels
 
 
@@ -40,7 +40,7 @@ def _target_category_ids(coco: dict) -> set:
     name_to_idx = {n: i for i, n in enumerate(TARGET_CLASSES)}
     ok = set()
     for cat in coco.get("categories", []):
-        if COCO_TO_CANONICAL.get(cat.get("name")) in name_to_idx:
+        if COCO_TO_TARGET.get(cat.get("name")) in name_to_idx:
             ok.add(cat["id"])
     return ok
 
