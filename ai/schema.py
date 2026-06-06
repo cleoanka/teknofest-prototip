@@ -97,7 +97,8 @@ class FrameResult(BaseModel):
     driver: DriverState = Field(default_factory=DriverState)
     risk: RiskAssessment = Field(default_factory=RiskAssessment)
     qod: QoDStatus = Field(default_factory=QoDStatus)
-    latency_ms: float = 0.0
+    latency_ms: float = 0.0          # YZ pipeline çıkarım süresi (ms)
+    total_latency_ms: float = 0.0    # Uçtan uca gecikme — client_ts varsa ağ dahil (ms)
     fps: float = 0.0
 
 

@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from typing import List, Optional
 
 from ai.schema import EventRecord
+
+_VALID_LEVELS = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 
 
 class EventStore:
@@ -39,6 +42,12 @@ class EventStore:
                 )
                 """
             )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_plate ON events(plate)"
+            )
             self._conn.commit()
 
     def add(self, ev: EventRecord) -> int:
@@ -53,13 +62,40 @@ class EventStore:
             self._conn.commit()
             return int(cur.lastrowid)
 
-    def list(self, limit: int = 50, min_score: int = 0) -> List[EventRecord]:
+    def get(self, event_id: int) -> Optional[EventRecord]:
         with self._lock:
-            rows = self._conn.execute(
-                """SELECT * FROM events WHERE risk_score >= ?
-                   ORDER BY ts DESC LIMIT ?""",
-                (min_score, limit),
-            ).fetchall()
+            row = self._conn.execute(
+                "SELECT * FROM events WHERE id = ?", (event_id,)
+            ).fetchone()
+        return EventRecord(**dict(row)) if row else None
+
+    def list(
+        self,
+        limit: int = 50,
+        min_score: int = 0,
+        from_ts: Optional[float] = None,
+        to_ts: Optional[float] = None,
+        level: Optional[str] = None,
+        vtype: Optional[str] = None,
+    ) -> List[EventRecord]:
+        q = "SELECT * FROM events WHERE risk_score >= ?"
+        params: list = [min_score]
+        if from_ts is not None:
+            q += " AND ts >= ?"
+            params.append(from_ts)
+        if to_ts is not None:
+            q += " AND ts <= ?"
+            params.append(to_ts)
+        if level is not None and level in _VALID_LEVELS:
+            q += " AND risk_level = ?"
+            params.append(level)
+        if vtype is not None:
+            q += " AND vtype = ?"
+            params.append(vtype)
+        q += " ORDER BY ts DESC LIMIT ?"
+        params.append(limit)
+        with self._lock:
+            rows = self._conn.execute(q, params).fetchall()
         return [EventRecord(**dict(r)) for r in rows]
 
     def vehicles(self, limit: int = 50) -> List[dict]:
@@ -68,11 +104,58 @@ class EventStore:
                 """SELECT plate, vtype, MAX(speed_kmh) as max_speed,
                           MAX(risk_score) as max_risk, COUNT(*) as sightings,
                           MAX(ts) as last_seen
-                   FROM events WHERE plate IS NOT NULL
+                   FROM events WHERE plate IS NOT NULL AND plate != ''
                    GROUP BY plate ORDER BY last_seen DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def vehicles_by_plate(self, plate: str, limit: int = 100) -> List[EventRecord]:
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT * FROM events WHERE plate = ?
+                   ORDER BY ts DESC LIMIT ?""",
+                (plate, limit),
+            ).fetchall()
+        return [EventRecord(**dict(r)) for r in rows]
+
+    def statistics(self, period_s: float = 3600.0) -> dict:
+        """Son `period_s` saniyedeki istatistikler."""
+        since = time.time() - period_s
+        with self._lock:
+            total_row = self._conn.execute(
+                "SELECT COUNT(*) FROM events WHERE ts >= ?", (since,)
+            ).fetchone()
+            high_risk_row = self._conn.execute(
+                "SELECT COUNT(*) FROM events WHERE ts >= ? AND risk_score >= 60",
+                (since,),
+            ).fetchone()
+            avg_speed_row = self._conn.execute(
+                "SELECT AVG(speed_kmh) FROM events WHERE ts >= ? AND speed_kmh IS NOT NULL",
+                (since,),
+            ).fetchone()
+            breakdown_rows = self._conn.execute(
+                """SELECT risk_level, COUNT(*) as cnt
+                   FROM events WHERE ts >= ?
+                   GROUP BY risk_level""",
+                (since,),
+            ).fetchall()
+        breakdown = {lvl: 0 for lvl in _VALID_LEVELS}
+        for row in breakdown_rows:
+            breakdown[row["risk_level"]] = row["cnt"]
+        avg_spd = avg_speed_row[0]
+        return {
+            "period_s": period_s,
+            "event_count": total_row[0],
+            "high_risk_count": high_risk_row[0],
+            "avg_speed_kmh": round(avg_spd, 1) if avg_spd is not None else None,
+            "risk_breakdown": breakdown,
+        }
+
+    def count(self) -> int:
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+        return row[0]
 
     def clear(self) -> None:
         with self._lock:

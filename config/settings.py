@@ -96,10 +96,26 @@ class Settings(BaseSettings):
     qod_max_session_s: float = Field(default=5.0)
     qod_consecutive_required: int = Field(default=2)         # iki ardışık pozitif
 
-    # Mock CAMARA 5G
+    # Mock CAMARA 5G simülatörü
     camara_qod_normal_mbps: int = Field(default=5)
     camara_qod_critical_mbps: int = Field(default=20)
     camara_network_latency_ms: int = Field(default=60)
+
+    # CAMARA Gerçek API Geçiş Altyapısı (mock modda boş kalır)
+    camara_mode: str = Field(default="mock")            # mock | real
+    camara_base_url: str = Field(default="")            # Turkcell sandbox URL
+    camara_client_id: str = Field(default="")
+    camara_client_secret: str = Field(default="")
+
+    # JWT RS256 (ÖTR: JWT RS256 + 100 req/dak)
+    require_auth: bool = Field(default=False)           # True → Bearer token zorunlu
+    jwt_ttl_s: int = Field(default=3600)                # Token geçerlilik süresi (s)
+
+    # Rate limiting (ÖTR: 100 req/dak per IP)
+    rate_limit: int = Field(default=100)                # req/minute
+
+    # WebSocket
+    ws_max_frame_bytes: int = Field(default=5 * 1024 * 1024)  # 5 MB
 
     # Hız tahmini (kalibrasyonsuz bbox-alan modeli)
     speed_ppm_exponent: float = Field(default=0.65)

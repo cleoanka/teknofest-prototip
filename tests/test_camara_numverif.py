@@ -15,10 +15,12 @@ def test_silent_verify_mismatch():
 
 
 def test_token_issue_and_validate():
-    nv = MockNumberVerification()
-    token = nv.issue_token("+905320001122")
-    assert nv.validate_token(token) is not None
-    assert nv.validate_token("gecersiz") is None
+    """Token üretimi artık RS256 JWT ile backend/auth.py üzerinden yapılıyor."""
+    from backend.auth import JWTManager
+    mgr = JWTManager()
+    token = mgr.issue("+905320001122")
+    assert mgr.verify(token) is not None
+    assert mgr.verify("gecersiz") is None
 
 
 def test_api_endpoint(client):
