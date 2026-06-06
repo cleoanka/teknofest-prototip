@@ -13,9 +13,11 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional, Set
 
+import uuid
 import numpy as np
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -108,13 +110,27 @@ def _validate_plate(plate: str) -> str:
 
 app = FastAPI(
     title="Akıllı Yol Güvenliği — 5G & YZ Backend",
-    version="1.2.0",
+    version="1.3.0",
     description="TEKNOFEST 2026 · CAMARA QoD + Number Verification + YZ Risk Motoru",
     lifespan=lifespan,
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def security_and_request_id(request: Request, call_next):
+    """Güvenlik headerleri + istek izleme X-Request-ID ekler."""
+    req_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = req_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    return response
+
 
 Instrumentator().instrument(app).expose(app)
 
@@ -230,6 +246,7 @@ async def qod_status(request: Request):
 async def events(
     request: Request,
     limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0, description="Sayfalama: atlanacak olay sayısı"),
     min_score: int = Query(default=0, ge=0, le=100),
     from_ts: Optional[float] = Query(default=None, description="Başlangıç timestamp (epoch saniye)"),
     to_ts: Optional[float] = Query(default=None, description="Bitiş timestamp (epoch saniye)"),
@@ -239,12 +256,16 @@ async def events(
 ):
     """Riskli olay listesi — filtreleme ve sayfalama destekli. X-Total-Count header ile toplam sayı."""
     evs = state.store.list(
-        limit=limit, min_score=min_score,
+        limit=limit, offset=offset, min_score=min_score,
         from_ts=from_ts, to_ts=to_ts, level=level, vtype=vtype,
+    )
+    filtered_total = state.store.count_filtered(
+        min_score=min_score, from_ts=from_ts, to_ts=to_ts, level=level, vtype=vtype,
     )
     response = JSONResponse(content=[e.model_dump() for e in evs])
     response.headers["X-Total-Count"] = str(state.store.count())
-    response.headers["X-Filtered-Count"] = str(len(evs))
+    response.headers["X-Filtered-Count"] = str(filtered_total)
+    response.headers["X-Offset"] = str(offset)
     return response
 
 
@@ -336,6 +357,47 @@ async def statistics(
         "bandwidth_efficiency": state.qod.bandwidth_efficiency(),
         "qod_mode": state.qod.status().mode,
         "bandwidth_mbps": state.qod.provider.current_bandwidth_mbps(),
+    }
+
+
+@app.get("/api/qod/proof", tags=["analytics"])
+@limiter.limit(f"{settings.rate_limit}/minute")
+async def qod_proof(
+    request: Request,
+    _auth: Optional[dict] = Depends(require_auth),
+):
+    """
+    ÖTR %40 bant verimliliği kriteri kanıtı — jüri değerlendirmesi için.
+
+    CAMARA QoD ile Normal/Kritik mod arasında geçişleri izler.
+    Normal modda 5 Mbps, Kritik modda yüksek bant kullanılır.
+    Verimlilik = kritik_döngü / toplam_döngü × 100.
+    """
+    qod = state.qod
+    total = qod._cycles
+    critical = qod._critical_cycles
+    efficiency = qod.bandwidth_efficiency()
+    s = state.settings
+    return {
+        "criterion": "ÖTR Madde 4.2 — Dinamik Bant Yönetimi (CAMARA QoD)",
+        "target_efficiency_pct": 40.0,
+        "measured_efficiency_pct": round(efficiency * 100, 2),
+        "meets_criterion": efficiency >= 0.40,
+        "total_qod_cycles": total,
+        "critical_mode_cycles": critical,
+        "normal_mode_cycles": total - critical,
+        "normal_bandwidth_mbps": s.camara_qod_normal_mbps,
+        "critical_bandwidth_mbps": s.camara_qod_critical_mbps,
+        "current_mode": qod.status().mode,
+        "active_session_id": qod.status().active_session_id,
+        "camara_mode": s.camara_mode,
+        "qod_triggers": [
+            "bbox_growth > threshold",
+            "low_conf_consecutive > required",
+            "ocr_conf < threshold",
+            "roi_line_approach",
+            "ambiguous_score in range",
+        ],
     }
 
 

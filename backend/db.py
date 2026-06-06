@@ -72,6 +72,7 @@ class EventStore:
     def list(
         self,
         limit: int = 50,
+        offset: int = 0,
         min_score: int = 0,
         from_ts: Optional[float] = None,
         to_ts: Optional[float] = None,
@@ -92,11 +93,39 @@ class EventStore:
         if vtype is not None:
             q += " AND vtype = ?"
             params.append(vtype)
-        q += " ORDER BY ts DESC LIMIT ?"
+        q += " ORDER BY ts DESC LIMIT ? OFFSET ?"
         params.append(limit)
+        params.append(offset)
         with self._lock:
             rows = self._conn.execute(q, params).fetchall()
         return [EventRecord(**dict(r)) for r in rows]
+
+    def count_filtered(
+        self,
+        min_score: int = 0,
+        from_ts: Optional[float] = None,
+        to_ts: Optional[float] = None,
+        level: Optional[str] = None,
+        vtype: Optional[str] = None,
+    ) -> int:
+        """Filtre uygulanmış toplam olay sayısı — pagination için."""
+        q = "SELECT COUNT(*) FROM events WHERE risk_score >= ?"
+        params: list = [min_score]
+        if from_ts is not None:
+            q += " AND ts >= ?"
+            params.append(from_ts)
+        if to_ts is not None:
+            q += " AND ts <= ?"
+            params.append(to_ts)
+        if level is not None and level in _VALID_LEVELS:
+            q += " AND risk_level = ?"
+            params.append(level)
+        if vtype is not None:
+            q += " AND vtype = ?"
+            params.append(vtype)
+        with self._lock:
+            row = self._conn.execute(q, params).fetchone()
+        return row[0]
 
     def vehicles(self, limit: int = 50) -> List[dict]:
         with self._lock:
