@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
 ![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-purple)
 ![React Native](https://img.shields.io/badge/React%20Native-Expo-61DAFB?logo=react&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-73%20geçiyor-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-248%20geçiyor-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![GPU](https://img.shields.io/badge/GPU-CUDA%20%7C%20MPS%20%7C%20CPU-green)
 ![5G](https://img.shields.io/badge/5G-CAMARA%20QoD-red)
@@ -62,7 +62,7 @@ Normal → Tehlike Tespit → 5G QoD API → Bant 5→20 Mbps → Kritik Analiz 
 |--------|---------|-----------|
 | YZ doğruluğu (araç, plaka, hız, araç içi nesne) | **%40** | `ai/pipeline.py` — YOLOv8 + OCR + MediaPipe + risk |
 | 5G QoD — **yalnız ihtiyaç anında** bant yükseltme | **%40** | `ai/qod_trigger.py` (A–E koşul motoru) + `backend/qod_manager.py` |
-| Mimari & modern pratikler | **%20** | Katmanlı mimari, tip-güvenli şema, 73 test, `ARCHITECTURE.md` |
+| Mimari & modern pratikler | **%20** | Katmanlı mimari, tip-güvenli şema, 248 test, `ARCHITECTURE.md` |
 
 ---
 
@@ -121,7 +121,7 @@ npx expo start        # QR kodu telefonla okut (Expo Go uygulaması gerekli)
 ### 3 — Testler & Değerlendirme
 
 ```bash
-make test             # 73 pytest testi (model gerektirmez, mock modda çalışır)
+make test             # 248 pytest testi (model gerektirmez, mock modda çalışır)
 make eval             # sentetik veri + Normal/Kritik doğruluk raporu
 ```
 
@@ -132,14 +132,22 @@ make eval             # sentetik veri + Normal/Kritik doğruluk raporu
 | Bileşen | Durum |
 |---------|-------|
 | YZ hattı (detector, tracking, speed, plate_ocr, driver_state, risk, qod_trigger, pipeline) | ✅ Hazır |
-| Mock modda uçtan uca çalışma | ✅ 73 test yeşil |
+| Mock modda uçtan uca çalışma | ✅ 248 test yeşil |
 | Windows + CUDA doğrulaması (RTX 4070 Laptop) | ✅ Tamamlandı |
 | Gerçek YOLOv8 GPU çıkarımı (**72.7 FPS** yolov8n, RTX 4070) | ✅ Tamamlandı |
 | Eğitim/veri araçları (`prepare_dataset`, `train`, `fetch_data`) | ✅ Hazır |
-| Gerçek plaka OCR (EasyOCR + GPU) | 🔄 Bekliyor — Faz 4 |
-| Sürücü davranışı gerçek test (MediaPipe) | 🔄 Bekliyor — Faz 5 |
-| QoD eval kanıtı (Normal vs Kritik raporu) | 🔄 Bekliyor — Faz 7 |
-| Fine-tune (komite verisi) | ⏳ Komiteye bağlı — Faz 8 |
+| JWT RS256 kimlik doğrulama + rate limiting (100 req/dak) | ✅ Tamamlandı |
+| Prometheus `/metrics` + Grafana hazır | ✅ Tamamlandı |
+| Uçtan uca gecikme ölçümü (`total_latency_ms`) | ✅ Tamamlandı |
+| Zengin API (statistics, vehicles/{plate}, events/{id}, export, heatmap) | ✅ Tamamlandı |
+| Plaka OCR — çok-blok birleştirme + Tesseract yedek (v2.2) | ✅ Tamamlandı |
+| Sigara tespiti — el-ağız heuristic (v2.2) | ✅ Tamamlandı |
+| CAMARA env vars (mock→gerçek geçiş altyapısı) | ✅ Tamamlandı |
+| Gerçek plaka OCR karanlık sahne iyileştirmesi | 🔄 Faz 4 |
+| Sürücü davranışı gerçek test (MediaPipe sahne testi) | 🔄 Faz 5 |
+| Hız kalibrasyonu (saha referansı) | 🔄 Faz 6 |
+| QoD eval kanıtı (Normal vs Kritik bant verimliliği raporu) | 🔄 Faz 7 |
+| Fine-tune (TOGG/komite verisi) | ⏳ Komiteye bağlı — Faz 8 |
 
 Detaylı ilerleme ve karar günlüğü: [`ai/PROGRESS.md`](ai/PROGRESS.md)
 
@@ -192,7 +200,9 @@ teknofest-prototip/
 │       └── data.yaml            7 sınıf yapılandırması
 │
 ├── backend/             🖥️ FastAPI sunucu
-│   ├── main.py              REST + WebSocket uç noktaları + video test endpoint
+│   ├── main.py              REST + WebSocket uç noktaları (v1.5)
+│   ├── auth.py              JWT RS256 kimlik doğrulama
+│   ├── metrics.py           Prometheus domain metrikleri
 │   ├── qod_manager.py       Tetik motoru ↔ CAMARA köprüsü
 │   ├── db.py                SQLite olay deposu
 │   ├── frames.py            Kare çözümleme/kodlama
@@ -215,7 +225,7 @@ teknofest-prototip/
 │   ├── camera_client.py     Masaüstü kamera istemcisi
 │   └── smoke_real_model.py  Gerçek model duman testi
 │
-├── tests/               ✅ 73 pytest testi
+├── tests/               ✅ 248 pytest testi (25 dosya, mock modda çalışır)
 ├── eval/                📊 Doğruluk değerlendirmesi
 │   ├── evaluate.py          Normal vs Kritik + bant verimliliği
 │   └── real_smoke.py        Gerçek-mod pipeline duman testi
@@ -289,19 +299,42 @@ curl -X POST http://localhost:8000/api/test-video \
 | Uç Nokta | Yöntem | Açıklama |
 |----------|--------|---------|
 | `/api/health` | GET | Sistem sağlık kontrolü |
-| `/api/events` | GET | Riskli olay listesi |
+| `/api/health/deep` | GET | Derin sağlık kontrolü (DB, pipeline, WS) |
+| `/api/ping` | GET | Canlılık testi |
+| `/api/version` | GET | Versiyon bilgisi |
+| `/api/system/info` | GET | Süreç, bellek, uptime istatistikleri |
+| `/api/events` | GET | Riskli olay listesi (filtreli, sayfalı) |
+| `/api/events/summary` | GET | Olay özet istatistikleri |
+| `/api/events/export` | GET | CSV dışa aktarım (plaka/seviye filtreli) |
+| `/api/events/heatmap` | GET | Zaman bazlı yoğunluk haritası |
+| `/api/events/{id}` | GET | Tek olay detayı |
+| `/api/events/{id}` | DELETE | Tek olay sil |
+| `/api/statistics` | GET | Son N saatin istatistikleri |
 | `/api/vehicles` | GET | Plaka bazlı araç özeti |
+| `/api/vehicles/{plate}` | GET | Plakaya göre olay geçmişi |
+| `/api/vehicles/{plate}/timeline` | GET | Araç zaman çizelgesi |
 | `/api/qod/status` | GET | Bant genişliği durumu + verimlilik |
+| `/api/qod/proof` | GET | QoD tetik kanıtı raporu |
+| `/api/settings` | GET | Çalışma zamanı ayarları |
+| `/api/settings` | PATCH | Ayar güncelleme (AI_MODE vb.) |
 | `/api/test-video` | POST | Video dosyası YZ'den geçir |
 | `/api/test-video/files` | GET | Mevcut test videoları listele |
 | `/api/clear` | POST | Olay veritabanını temizle |
-| `/camara/number-verification:verify` | POST | Sessiz SIM doğrulama |
-| `/camara/qod/sessions` | POST | QoD oturumu aç |
+| `/api/demo-token` | POST | Geliştirme JWT token'ı |
+| `/.well-known/jwks.json` | GET | RS256 public key (JWKS) |
+| `/camara/number-verification:verify` | POST | Sessiz SIM doğrulama → RS256 JWT |
+| `/camara/qod/sessions` | GET | Aktif QoD oturumları |
+| `/camara/qod/sessions` | POST | QoD oturumu aç (20 Mbps) |
+| `/camara/qod/sessions/{id}` | GET | Oturum detayı |
 | `/camara/qod/sessions/{id}` | DELETE | QoD oturumunu kapat |
+| `/metrics` | GET | Prometheus metrikleri |
 | `/ws/ingest` | WS | Kare gönder → sonuç al |
 | `/ws/detections` | WS | Salt-okuma abone soketi |
+| `/ws/status` | WS | Sistem durum soketi |
 
-Tüm uç noktaları tarayıcıdan dene: [`http://localhost:8000/docs`](http://localhost:8000/docs)
+> Tüm `/api/*` ve `/camara/*` uç noktaları: **100 req/dak** rate limit · `Authorization: Bearer <JWT>` opsiyonel.
+
+Swagger UI: [`http://localhost:8000/docs`](http://localhost:8000/docs)
 
 ---
 
@@ -311,7 +344,7 @@ Tüm uç noktaları tarayıcıdan dene: [`http://localhost:8000/docs`](http://lo
 # Sistem
 ./run_dev.sh              # Tam sistem başlat (macOS/Linux)
 .\run_dev.ps1             # Tam sistem başlat (Windows)
-make test                 # 73 testi çalıştır
+make test                 # 248 testi çalıştır
 make eval                 # Normal vs Kritik doğruluk raporu
 make mock                 # Sentetik test videosu üret
 make clean                # venv + cache + db temizle
