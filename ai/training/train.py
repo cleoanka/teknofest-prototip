@@ -211,6 +211,41 @@ def resolve_device(device: str) -> str:
     return "cpu"
 
 
+def _resolve_data_yaml(data_path: str) -> str:
+    """data.yaml içindeki göreli `path:`'i repo köküne göre **mutlak** yapıp çözülmüş
+    bir kopya yazar ve onun yolunu döner.
+
+    Neden: ultralytics, data.yaml'deki göreli `path:`'i global `datasets_dir` ayarına
+    göre çözer ve bu değeri import anında sabitler — `settings.update()` process içinde
+    geç kalır. `path:` mutlak olduğunda ultralytics datasets_dir'i hiç kullanmaz; böylece
+    çözümleme her makinede dosya konumundan deterministik olur (elle ayar gerekmez).
+    Mutlak `path` zaten varsa dosya olduğu gibi kullanılır (kopya yazılmaz).
+    """
+    import os
+    import tempfile
+    # ai/training/train.py → ai/training → ai → <repo kökü>
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    with open(data_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    out, changed = [], False
+    for line in lines:
+        s = line.strip()
+        if s.startswith("path:"):
+            val = s.split(":", 1)[1].strip()
+            if val and not os.path.isabs(val):
+                abs_path = os.path.normpath(os.path.join(repo_root, val)).replace("\\", "/")
+                out.append(f"path: {abs_path}\n")
+                changed = True
+                continue
+        out.append(line)
+    if not changed:
+        return data_path
+    fd, tmp = tempfile.mkstemp(prefix="data_resolved_", suffix=".yaml")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.writelines(out)
+    return tmp
+
+
 def run_stage(stage: Stage) -> str:
     """Tek aşamayı eğitir ve değerlendirir. best.pt yolunu döner."""
     from ultralytics import YOLO
@@ -256,6 +291,13 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="planı yazdır, eğitim koşturma (GPU gerekmez)")
     args = ap.parse_args()
+
+    # Gerçek koşumda data.yaml'deki göreli `path:`'i mutlak yap (taşınabilir çözümleme,
+    # bkz. _resolve_data_yaml). Dry-run'da dokunma → plan orijinal yolu gösterir.
+    if not args.dry_run:
+        args.data = _resolve_data_yaml(args.data)
+        if args.field_data:
+            args.field_data = _resolve_data_yaml(args.field_data)
 
     # Kademe varsayılanları + export kısayolu çözümü.
     tier = resolve_tier(args.tier, args.base, args.imgsz)

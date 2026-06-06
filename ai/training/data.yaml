@@ -9,7 +9,9 @@
 #     images/test/*.jpg    labels/test/*.txt
 # Her .txt satırı:  <class_id> <x_center> <y_center> <w> <h>   (0-1 normalize)
 
-path: ../../datasets/yolguvenligi
+# `path` repo köküne görelidir. train.py:_resolve_data_yaml() bunu gerçek koşumda
+# mutlak yola çevirir (ultralytics datasets_dir önbelleğini atlar; taşınabilir çözümleme).
+path: datasets/yolguvenligi
 train: images/train
 val: images/val
 test: images/test
