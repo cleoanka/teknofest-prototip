@@ -252,6 +252,44 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
   doğrulandı (car/truck/motorcycle ayırt edildi). *Çerçeve:* doğruluk = gerçek per-sınıf mAP (.684);
   QoD mekanizması = gerçek video bant ölçümü; mock senaryo = deterministik kavram kanıtı.
 
+### ✅ Tamamlanan (7 Haziran — plaka tespiti/crop + araç-id takibi + oto-indirme)
+> Kapsam: `plate_detection_plan.md` Katman 0.1 (SSL), 2.x (crop/keskinlik), 2.3 (id-takip),
+> 1.1 (gerçek model). Kullanıcı isteği: "crop mükemmel dikdörtgen olmak zorunda değil; siyah
+> çerçeveyi sürekli takip etmek önemli. Plaka karede yoksa araç id'sine bağlı devam et, saçma
+> şeyleri plaka sanma. Gerekirse yeni model eğit + oto-indirme bağla."
+
+- **`ai/plate_crop.py` (YENİ):** "siyah çerçeveyi takip et" katmanı.
+  - `looks_like_plate()` — plaka-benzerlik geçidi (aspect 1.8–8, kontrast std, dikey kenar
+    yoğunluğu) → trafik levhası/far/düz panel gibi **saçma bölgeler OCR'a gitmeden elenir**.
+  - `refine_to_frame()` — ROI içinde plakanın koyu çerçevesini minAreaRect ile bulup ona
+    sıkılaştırır; belirgin eğikse deskew. **Mükemmel dikdörtgen şart değil**; bulunamazsa
+    girdi pad'li döner (bilgi kaybı yok). `plate_sharpness()` Laplacian.
+- **`ai/plate_tracker.py` (YENİ):** `PlateTracker` araç `track_id` → en iyi geçerli okuma
+  (öncelik: geçerli format > güven > keskinlik). Plaka o karede yoksa **son bilinen plaka
+  korunur** (id'ye bağlı süreklilik; titremez, boş/yanlış kayda düşmez). ttl ile prune.
+- **`ai/pipeline.py` Blok D yeniden yazıldı:** `_find_plate` (araç crop tercih, yoksa full
+  frame=TOGG) → likeness geçidi → çerçeve-takip crop → OCR → `PlateTracker.update/resolve`.
+  Eski **kör "araç alt %50" fallback'i kaldırıldı** (saçma OCR kaynağıydı).
+- **`ai/lp_detector.py`:** ölü `keremberke` repo'su (401) → **doğrulanmış model**
+  `morsetechlab/yolov11-license-plate-detection` (v1n, ~5.3MB). **Oto-indirme VARSAYILAN AÇIK**
+  (`lp_auto_download`); model yoksa ilk gerçek koşumda `~/.cache/teknofest/lp_yolo.pt`'ye çekilir.
+  Mock/CI (`LP_MOCK=1`) hiç ağ kullanmaz (K4). SSL **global kapatılmıyor**; certifi CA kullanılıyor.
+- **`ai/plate_ocr.py`:** Katman 0.1 düzeltildi — modül-seviyesi `ssl._create_unverified_context`
+  (tüm sürecin HTTPS doğrulamasını kapatan MITM açığı) kaldırıldı; certifi yalnız EasyOCR Reader
+  oluşturma bloğuna `_easyocr_ssl_context()` ile sarıldı.
+- **`config/settings.py`:** `lp_auto_download/lp_model_repo/lp_model_file`, `plate_refine_crop`,
+  `plate_deskew`, `plate_min_likeness_std`, `plate_min_edge_density`, `plate_track_ttl_frames`.
+
+**Ölçüm (gerçek mod, 3 test videosu, sıralı kare okuma, MPS):**
+- video_1: plaka **`34TC8532`** doğru, id-takip ile **conf 0.956**'da kararlı (f80→f330);
+  araç değişince (track 3, plaka yok) doğru biçimde **None** (saçma üretmedi). med_lat ~50ms.
+- video_2: doğru **`34TC8532`** (216 kare baskın; erken `34TC0532` misread tracker'da elenir).
+- video_3: OCR karışık (`34TC8532`/`34TC0532`/…) → tespit+crop+takip çalışıyor; **OCR kalitesi**
+  (Katman 3: PaddleOCR/deskew/SR) ayrı iş, bu görevin kapsamı dışı.
+- **Testler:** `test_plate_tracker.py` (7) + `test_plate_crop.py` (8) eklendi → **308 yeşil** (mock).
+
+> **R7 KAPANDI:** lp_detector artık çalışan modeli oto-indiriyor; CV fallback yalnız ağsız son çare.
+
 ### ⏭️ Sıradaki (öncelik sırası)
 1. **cigarette/seatbelt/headphone verisi:** Roboflow/manuel → bu 3 sürücü-davranışı sınıfını da kapat (`merge_yolo` ile kat).
 2. **INT8 export** (`train --export engine-int8`) + gerçek FPS ölçümü (plan Bölüm 9).

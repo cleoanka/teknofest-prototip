@@ -14,17 +14,44 @@ Düzeltilen sorunlar (v2 → v3):
 """
 from __future__ import annotations
 
+import os
 import re
-import ssl
 from collections import deque, Counter
+from contextlib import contextmanager
 from typing import List, Optional, Tuple
 
 import numpy as np
 
 from ai.schema import PlateResult
 
-# Python 3.13 SSL sertifika hatası düzeltme (EasyOCR model indirme)
-ssl._create_default_https_context = ssl._create_unverified_context  # type: ignore[attr-defined]
+
+@contextmanager
+def _easyocr_ssl_context():
+    """EasyOCR model indirmesi için SSL sertifikasını GÜVENLİ ayarla.
+
+    Eski kod modül seviyesinde `ssl._create_default_https_context =
+    ssl._create_unverified_context` yapıyordu → import zinciri (backend → pipeline →
+    plate_ocr) yüzünden TÜM sürecin HTTPS doğrulaması kapanıyordu (webhook, dış API,
+    CAMARA QoD dahil). MITM açığı. Burada doğrulamayı KAPATMIYORUZ; sadece certifi
+    CA paketini bu Reader oluşturma bloğu için ortama veriyoruz (varsa).
+    """
+    try:
+        import certifi
+        prev_cert = os.environ.get("SSL_CERT_FILE")
+        prev_req = os.environ.get("REQUESTS_CA_BUNDLE")
+        os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+        os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+        try:
+            yield
+        finally:
+            # Bu blok dışında ortamı bozmamak için eski değerleri geri yükle.
+            for key, prev in (("SSL_CERT_FILE", prev_cert), ("REQUESTS_CA_BUNDLE", prev_req)):
+                if prev is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = prev
+    except Exception:
+        yield
 
 # TR plaka regex: 2 rakam (il) + 1-3 harf + 2-4 rakam
 TR_PLATE_RE = re.compile(r"^(0[1-9]|[1-7][0-9]|8[01])[A-Z]{1,3}[0-9]{2,4}$")
@@ -185,10 +212,11 @@ class PlateReader:
         if self.mode == "real":
             try:
                 import easyocr
-                self._reader = easyocr.Reader(
-                    ["en"],
-                    gpu=_detect_easyocr_device(),
-                )
+                with _easyocr_ssl_context():
+                    self._reader = easyocr.Reader(
+                        ["en"],
+                        gpu=_detect_easyocr_device(),
+                    )
             except Exception:
                 self.mode = "mock"
 
