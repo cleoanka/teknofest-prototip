@@ -71,6 +71,13 @@ class EventStore:
             ).fetchone()
         return EventRecord(**dict(row)) if row else None
 
+    def delete_by_id(self, event_id: int) -> bool:
+        """Tek olay sil — bulunamazsa False döner."""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
+            self._conn.commit()
+        return cur.rowcount > 0
+
     def list(
         self,
         limit: int = 50,

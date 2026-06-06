@@ -46,6 +46,10 @@
 | DELETE /api/events (bulk) | ✅ | confirm=true + filtre parametreleri; döner: deleted + remaining |
 | /api/demo-token | ✅ | require_auth=False modda hızlı JWT üretimi — jüri sunumu için |
 | /api/vehicles/{plate}/timeline | ✅ | Saatlik risk zaman serisi; avg_speed, max_risk, risk_levels |
+| /api/events/heatmap | ✅ | Zaman×risk_level 2D matris (hours param, tüm 4 level) |
+| POST /api/events/test | ✅ | Demo test olay enjeksiyonu; count/risk_level/plate_prefix ayarlanabilir |
+| DELETE /api/events/{id} | ✅ | Tek olay ID ile silme, 404 koruması |
+| /api/ping | ✅ | Ultralight gecikme ölçümü; sadece epoch timestamp döner |
 
 ---
 
@@ -105,7 +109,7 @@ Filtre parametrelerini destekliyor (from_ts, to_ts, level, vtype).
 ```
 Son çalıştırma: 2026-06-06
 Durum: TÜM TESTLER YEŞİL ✅
-Toplam test: 216 (73 eski → 216 yeni)
+Toplam test: 233 (73 eski → 233 yeni)
 Ortam: AI_MODE=mock, DB=:memory:
 ```
 
@@ -131,6 +135,7 @@ Ortam: AI_MODE=mock, DB=:memory:
 | test_v14_features.py | 19 | health/deep, X-Response-Time, WS auth, OpenAPI, JSON log |
 | test_sort_pagination_version.py | 17 | events sort, vehicles pagination, /api/version |
 | test_plate_search_delete_timeline.py | 18 | plate filtresi, bulk delete, demo-token, timeline |
+| test_heatmap_inject_delete_ping.py | 17 | heatmap, test inject, single delete, ping |
 | test_ws_e2e.py | 4 | WS ingest/detections/broadcast uçtan uca |
 
 ---
