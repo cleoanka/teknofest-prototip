@@ -281,6 +281,23 @@ async def qod_delete(request: Request, sid: str):
 # REST — Sistem
 # ──────────────────────────────────────────────────────────────────────────────
 
+@app.get("/api/version", tags=["system"])
+async def version_info():
+    """API sürüm bilgisi — bağımlılıklar, Python sürümü, ortam."""
+    import sys
+    import platform
+    return {
+        "version": app.version,
+        "title": app.title,
+        "python": sys.version.split()[0],
+        "platform": platform.system(),
+        "ai_mode": state.ai_mode if state else "unknown",
+        "camara_mode": get_settings().camara_mode,
+        "uptime_s": round(time.time() - _start_time, 1),
+        "build": "TEKNOFEST 2026",
+    }
+
+
 @app.get("/api/health", tags=["system"])
 @limiter.limit(f"{settings.rate_limit}/minute")
 async def health(request: Request):
@@ -377,12 +394,15 @@ async def events(
     to_ts: Optional[float] = Query(default=None, description="Bitiş timestamp (epoch saniye)"),
     level: Optional[str] = Query(default=None, description="Risk seviyesi: LOW|MEDIUM|HIGH|CRITICAL"),
     vtype: Optional[str] = Query(default=None, description="Araç tipi: car|truck|bus|motorcycle"),
+    sort_by: str = Query(default="ts", description="Sıralama alanı: ts|risk_score|speed_kmh|id"),
+    sort_dir: str = Query(default="desc", description="Sıralama yönü: asc|desc"),
     _auth: Optional[dict] = Depends(require_auth),
 ):
-    """Riskli olay listesi — filtreleme ve sayfalama destekli. X-Total-Count header ile toplam sayı."""
+    """Riskli olay listesi — filtreleme, sıralama ve sayfalama destekli."""
     evs = state.store.list(
         limit=limit, offset=offset, min_score=min_score,
         from_ts=from_ts, to_ts=to_ts, level=level, vtype=vtype,
+        sort_by=sort_by, sort_dir=sort_dir,
     )
     filtered_total = state.store.count_filtered(
         min_score=min_score, from_ts=from_ts, to_ts=to_ts, level=level, vtype=vtype,
@@ -531,10 +551,15 @@ async def qod_proof(
 async def vehicles(
     request: Request,
     limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0, description="Sayfalama: atlanacak araç sayısı"),
     _auth: Optional[dict] = Depends(require_auth),
 ):
-    """Plaka bazlı araç özeti — max hız, max risk, görülme sayısı."""
-    return state.store.vehicles(limit=limit)
+    """Plaka bazlı araç özeti — max hız, max risk, görülme sayısı, sayfalama destekli."""
+    rows = state.store.vehicles(limit=limit, offset=offset)
+    response = JSONResponse(content=rows)
+    response.headers["X-Total-Count"] = str(state.store.vehicles_count())
+    response.headers["X-Offset"] = str(offset)
+    return response
 
 
 @app.get("/api/vehicles/{plate}", tags=["vehicles"])

@@ -14,6 +14,8 @@ from typing import List, Optional
 from ai.schema import EventRecord
 
 _VALID_LEVELS = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+_VALID_SORT_COLS = {"ts", "risk_score", "speed_kmh", "id"}
+_VALID_SORT_DIRS = {"asc", "desc"}
 
 
 class EventStore:
@@ -78,7 +80,11 @@ class EventStore:
         to_ts: Optional[float] = None,
         level: Optional[str] = None,
         vtype: Optional[str] = None,
+        sort_by: str = "ts",
+        sort_dir: str = "desc",
     ) -> List[EventRecord]:
+        col = sort_by if sort_by in _VALID_SORT_COLS else "ts"
+        direction = sort_dir.lower() if sort_dir.lower() in _VALID_SORT_DIRS else "desc"
         q = "SELECT * FROM events WHERE risk_score >= ?"
         params: list = [min_score]
         if from_ts is not None:
@@ -93,7 +99,8 @@ class EventStore:
         if vtype is not None:
             q += " AND vtype = ?"
             params.append(vtype)
-        q += " ORDER BY ts DESC LIMIT ? OFFSET ?"
+        # col ve direction whitelist'ten geçti — SQL injection riski yok
+        q += f" ORDER BY {col} {direction.upper()} LIMIT ? OFFSET ?"
         params.append(limit)
         params.append(offset)
         with self._lock:
@@ -127,17 +134,25 @@ class EventStore:
             row = self._conn.execute(q, params).fetchone()
         return row[0]
 
-    def vehicles(self, limit: int = 50) -> List[dict]:
+    def vehicles(self, limit: int = 50, offset: int = 0) -> List[dict]:
         with self._lock:
             rows = self._conn.execute(
                 """SELECT plate, vtype, MAX(speed_kmh) as max_speed,
                           MAX(risk_score) as max_risk, COUNT(*) as sightings,
                           MAX(ts) as last_seen
                    FROM events WHERE plate IS NOT NULL AND plate != ''
-                   GROUP BY plate ORDER BY last_seen DESC LIMIT ?""",
-                (limit,),
+                   GROUP BY plate ORDER BY last_seen DESC LIMIT ? OFFSET ?""",
+                (limit, offset),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def vehicles_count(self) -> int:
+        """Benzersiz plaka sayısı — pagination için."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(DISTINCT plate) FROM events WHERE plate IS NOT NULL AND plate != ''"
+            ).fetchone()
+        return row[0]
 
     def vehicles_by_plate(self, plate: str, limit: int = 100) -> List[EventRecord]:
         with self._lock:
