@@ -58,7 +58,9 @@ def looks_like_plate(
       2) Düz/uniform DEĞİL — karakterler güçlü dikey kenarlar üretir (kenar yoğunluğu),
       3) Yeterli kontrast (std) — düz duvar/gökyüzü elenir.
 
-    Eşikler gevşek tutuldu: amaç bariz çöpü elemek, gerçek plakayı kaçırmamak.
+    Boyut-adaptif eşikler: küçük/uzak plakalar az piksel içerdiğinden std ve kenar
+    yoğunluğu doğal olarak düşer. 80px genişliğin altında eşikler kademeli gevşer,
+    böylece gerçek plakalar uzakken de elenmez.
     """
     if crop is None or crop.size == 0:
         return False
@@ -71,13 +73,21 @@ def looks_like_plate(
     try:
         import cv2
         gray = _to_gray(crop)
-        if float(gray.std()) < min_std:        # uniform bölge (duvar, panel) → plaka değil
+        # Boyut-adaptif ölçekleme: küçük/uzak plakalarda eşikleri gevşet.
+        # İki referans: 80px genişlik + 35px yükseklik (karakter çözünürlüğü).
+        # Her ikisi de küçükse daha serbest; büyüklerse tam eşiği kullan.
+        w_scale = min(1.0, w / 80.0)
+        h_scale = min(1.0, h / 35.0)
+        size_scale = max(0.30, min(w_scale, h_scale))
+        adj_std = min_std * size_scale
+        adj_edge = min_edge_density * size_scale
+        if float(gray.std()) < adj_std:
             return False
         # Dikey kenar yoğunluğu: plaka karakterleri çok sayıda dikey kenar üretir.
         sob = cv2.Sobel(gray, cv2.CV_16S, 1, 0, ksize=3)
         edges = np.abs(sob) > 60
         edge_density = float(edges.mean())
-        return edge_density >= min_edge_density
+        return edge_density >= adj_edge
     except Exception:
         # cv2 yoksa geometriye güven (mock/CI): aspect geçtiyse kabul
         return True

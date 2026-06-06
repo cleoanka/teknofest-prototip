@@ -171,9 +171,12 @@ class Settings(BaseSettings):
     # Plaka crop "siyah çerçeveyi takip et" katmanı (ai/plate_crop.py)
     plate_refine_crop: bool = Field(default=True)     # ROI içinde plaka çerçevesine sıkılaştır
     plate_deskew: bool = Field(default=True)          # belirgin eğikse düzleştir
-    plate_min_likeness_std: float = Field(default=18.0)   # plaka-benzerlik: min kontrast (std)
-    plate_min_edge_density: float = Field(default=0.04)   # plaka-benzerlik: min dikey kenar yoğunluğu
-    plate_track_ttl_frames: int = Field(default=45)       # araç kaybolunca plaka durumu ttl'i
+    plate_min_likeness_std: float = Field(default=18.0)   # plaka-benzerlik: min kontrast (std, boyut-adaptif)
+    plate_min_edge_density: float = Field(default=0.04)   # plaka-benzerlik: min dikey kenar yoğunluğu (boyut-adaptif)
+    # LP model confidence bu değerin üzerindeyse looks_like_plate gate'i atlanır.
+    # Model zaten yüksek güvenle tespit ettiyse küçük/uzak plakaların eşiklerini zorlaştırma.
+    plate_lp_conf_bypass: float = Field(default=0.30)
+    plate_track_ttl_frames: int = Field(default=75)       # araç kaybolunca plaka durumu ttl'i (75→1.5s@50fps)
 
     # Türk plakası fiziksel boyutları — mesafe kalibrasyonu için sabit (mm)
     plate_real_width_mm: float = Field(default=520.0)   # standart araç plakası
