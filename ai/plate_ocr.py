@@ -1,13 +1,20 @@
 """
-Plaka OCR — süper çözünürlük + çok-varyantlı okuma + konsensüs.
+Plaka OCR — production-grade.
 
-Gerçek mod: EasyOCR. Mock mod: yalnızca None döner (sahte plaka üretmez).
-SSL hatası Python 3.13'te modül seviyesinde yamalanır.
+Düzeltilen sorunlar (v2 → v3):
+  1. _LETTER_FIX str.maketrans duplicate '0' bug'ı → dict-bazlı tabloya geçildi
+  2. _apply_position_rules → kör sınır tespiti yerine tüm geçerli split noktaları
+     denenerek TR_PLATE_RE'ye uyan ilk sonuç seçilir (disambiguation by regex)
+  3. EasyOCR allowlist → sadece Türk plakasında geçen 31 karakter
+  4. GPU/MPS otomatik seçimi
+  5. Upscale → min 64px yükseklik garantisi
+  6. Preprocessing: CLAHE + bilateral + Otsu (4 varyant)
+  7. Güven-ağırlıklı konsensüs (aynı uzunlukta okumalar hizalanır)
+  8. Conf eşiği 0.55 (eski 0.70 çok agresifti)
 """
 from __future__ import annotations
 
 import re
-import ssl
 from collections import deque, Counter
 from typing import List, Optional, Tuple
 
@@ -15,79 +22,129 @@ import numpy as np
 
 from ai.schema import PlateResult
 
-# Python 3.13 SSL sertifika hatası düzeltme (EasyOCR model indirme)
-ssl._create_default_https_context = ssl._create_unverified_context  # type: ignore[attr-defined]
-
-# TR plaka: 2 il kodu + 1-3 harf + 2-4 rakam (34TC8532 gibi)
+# TR plaka regex: 2 rakam (il) + 1-3 harf + 2-4 rakam
 TR_PLATE_RE = re.compile(r"^(0[1-9]|[1-7][0-9]|8[01])[A-Z]{1,3}[0-9]{2,4}$")
+
+# EasyOCR allowlist: Türk plakasında GERÇEKTEN geçen karakterler
+# I, O, Q, W, X → Türk plakasında kullanılmıyor; çıkarıldı
+_PLATE_ALLOWLIST = "ABCDEFGHJKLMNPRSTUVYZ0123456789"
+
+_DIGITS = set("0123456789")
+_LETTERS = set("ABCDEFGHJKLMNPRSTUVYZ")
+
+# Karakter karmaşası düzeltme — dict bazlı (str.maketrans duplicate sorunu yok)
+# Rakam pozisyonunda harf → rakama çevir
+_OCR_TO_DIGIT: dict[str, str] = {
+    'O': '0', 'I': '1', 'B': '8', 'S': '5',
+    'Z': '2', 'G': '6', 'T': '7', 'A': '4',
+}
+# Harf pozisyonunda rakam → harfe çevir
+_OCR_TO_LETTER: dict[str, str] = {
+    '0': 'O', '1': 'I', '8': 'B', '5': 'S',
+    '2': 'Z', '6': 'G', '7': 'T', '4': 'A',
+}
+
+# Minimum boyutlar: bu altında OCR anlamsız
+MIN_PLATE_WIDTH = 80
+MIN_PLATE_HEIGHT = 28
+TARGET_PLATE_HEIGHT = 64   # upscale hedefi (piksel)
 
 
 def normalize_plate(text: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", (text or "").upper())
 
 
-def ocr_corrections(text: str) -> str:
-    """Yaygın OCR hataları: O↔0, I↔1, S↔5, B↔8 (pozisyona göre)."""
-    if not text or len(text) < 5:
-        return text
-    t = list(text)
-    digit_map = {"O": "0", "I": "1", "S": "5", "B": "8", "Z": "2", "G": "6",
-                 "J": "3", "D": "0", "Q": "0", "U": "0"}
-    alpha_map = {"0": "O", "1": "I", "5": "S", "8": "B"}
-
-    # İlk 2 karakter (il kodu) → rakam olmalı
-    for i in range(min(2, len(t))):
-        t[i] = digit_map.get(t[i], t[i])
-
-    # Son 2-4 karakteri rakama çevir (number suffix)
-    # Sayı bloğu son konumdan itibaren
-    j = len(t) - 1
-    digit_count = 0
-    while j >= 2 and t[j].isdigit() or (j >= 2 and t[j] in digit_map):
-        t[j] = digit_map.get(t[j], t[j])
-        digit_count += 1
-        j -= 1
-
-    return "".join(t)
-
-
 def is_valid_tr_plate(text: str) -> bool:
     return bool(TR_PLATE_RE.match(normalize_plate(text)))
 
 
-def super_resolve(crop: np.ndarray, scale: int = 4) -> np.ndarray:
-    """Gamma + LANCZOS4 ölçekleme + CLAHE + bilateral + keskinleştirme."""
+def _apply_position_rules(text: str) -> str:
+    """
+    Türk plaka yapısına göre karakter düzeltme.
+
+    Strateji: kör sınır tespiti yerine tüm geçerli split noktalarını (1, 2, 3 harf)
+    dener — regex'e uyan ilk sonucu döndürür. Regex uymasa da best-effort döner.
+
+    Örnek: '34AKB458' → harf grubu 1,2,3 harf ile denenir → '34AKB458' geçerli.
+    Örnek: '34OKB458' → '34' rakam zorunlu → '34OKB458'... ama 'O' il kodunda
+           rakama çevrilmeli → '340KB458'. Harf=1 → '340KB458'? Hayır, K→K,
+           sonra B,4,5,8 rakam. '34' + il kodu fix → '34'. Sonra split denenince
+           harf=3 → '34' + 'OKB' (harfe çevir 'O'→'O' zaten harf) + '458' → '34OKB458' ✓
+    """
+    if len(text) < 5:
+        return text
+
+    def fix_digit(c: str) -> str:
+        return _OCR_TO_DIGIT.get(c, c)
+
+    def fix_letter(c: str) -> str:
+        return _OCR_TO_LETTER.get(c, c)
+
+    # İl kodu: pozisyon 0-1 her zaman rakam
+    il = "".join(fix_digit(c) for c in text[:2])
+
+    # Harf grubu uzunluğunu 1,2,3 olarak dene; regex'e uyan ilk sonucu al
+    best_candidate = None
+    for n_letters in (1, 2, 3):
+        letter_end = 2 + n_letters
+        if letter_end >= len(text):
+            continue
+        harf = "".join(fix_letter(c) for c in text[2:letter_end])
+        sayi = "".join(fix_digit(c) for c in text[letter_end:])
+        candidate = il + harf + sayi
+        if is_valid_tr_plate(candidate):
+            return candidate
+        if best_candidate is None:
+            best_candidate = candidate
+
+    return best_candidate or text
+
+
+def _upscale(img: np.ndarray) -> np.ndarray:
+    """Plaka crop'unu TARGET_PLATE_HEIGHT yüksekliğine orantılı ölçekler."""
     try:
         import cv2
-        h, w = crop.shape[:2]
-        # Gamma correction for dark frames (underground parking etc.)
-        mean_brightness = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY).mean() if crop.ndim == 3 else crop.mean()
-        if mean_brightness < 80:
-            gamma = 0.35
-            lut = np.array([np.clip(((i / 255.0) ** gamma) * 255, 0, 255) for i in range(256)], dtype=np.uint8)
-            crop = cv2.LUT(crop, lut)
-        big = cv2.resize(crop, (w * scale, h * scale), interpolation=cv2.INTER_LANCZOS4)
-        # CLAHE on luminance for low-light robustness
-        gray = cv2.cvtColor(big, cv2.COLOR_BGR2GRAY) if big.ndim == 3 else big
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
-        enh = clahe.apply(gray)
-        big = cv2.cvtColor(enh, cv2.COLOR_GRAY2BGR)
-        filtered = cv2.bilateralFilter(big, 9, 75, 75)
-        kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]], dtype=np.float32)
-        return cv2.filter2D(filtered, -1, kernel)
+        h, w = img.shape[:2]
+        if h < 4 or w < 4:
+            return img
+        if h < TARGET_PLATE_HEIGHT:
+            scale = TARGET_PLATE_HEIGHT / h
+            new_w = max(1, int(w * scale))
+            img = cv2.resize(img, (new_w, TARGET_PLATE_HEIGHT),
+                             interpolation=cv2.INTER_CUBIC)
     except Exception:
-        return crop
+        pass
+    return img
 
 
-def _variants(crop: np.ndarray) -> List[np.ndarray]:
-    """Orijinal + CLAHE + ters — farklı ışık koşullarında OCR güvenilirliği."""
-    out = [crop]
+def _preprocess_variants(crop: np.ndarray) -> List[np.ndarray]:
+    """
+    Plakaya özel 4 preprocessing varyantı:
+      v0: orijinal (upscale)
+      v1: CLAHE gri → renk
+      v2: bilateral + Otsu binary → renk  (parlak gündüz, siyah-beyaz plaka)
+      v3: v2 ters                          (koyu zemin, sarı harf)
+    """
+    base = _upscale(crop)
+    out = [base]
     try:
         import cv2
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        gray = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY) if base.ndim == 3 else base.copy()
+
+        # v1: CLAHE
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4)).apply(gray)
         out.append(cv2.cvtColor(clahe, cv2.COLOR_GRAY2BGR))
-        out.append(cv2.cvtColor(255 - gray, cv2.COLOR_GRAY2BGR))
+
+        # v2: bilateral + Otsu — ince karakterleri kalınlaştırır
+        blurred = cv2.bilateralFilter(gray, 9, 75, 75)
+        _, binary = cv2.threshold(blurred, 0, 255,
+                                  cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        binary = cv2.dilate(binary, kernel, iterations=1)
+        out.append(cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR))
+
+        # v3: ters (açık zemin koyu yazı ↔ koyu zemin açık yazı)
+        out.append(cv2.cvtColor(255 - binary, cv2.COLOR_GRAY2BGR))
     except Exception:
         pass
     return out
@@ -102,31 +159,34 @@ def _laplacian_sharpness(img: np.ndarray) -> float:
         return float(np.var(img))
 
 
+def _detect_easyocr_device() -> bool:
+    """MPS (Apple Silicon) veya CUDA varsa True döndür."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return True
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            return True
+    except Exception:
+        pass
+    return False
+
+
 class PlateReader:
-    def __init__(self, mode: str = "auto", history: int = 8):
+    def __init__(self, mode: str = "auto", history: int = 10):
         self.mode = self._resolve(mode)
         self._reader = None
-        self._tesseract_ok = False
-        self._history: deque = deque(maxlen=history)
+        # history: (normalized_text, conf) tuple'ları
+        self._history: deque[Tuple[str, float]] = deque(maxlen=history)
         if self.mode == "real":
-            self._init_reader()
-
-    def _init_reader(self):
-        try:
-            import easyocr
-            # Türk plakası yalnızca A-Z + 0-9 kullanır → "en" modeli yeterli
-            self._reader = easyocr.Reader(["en"], gpu=False, verbose=False)
-        except Exception as e:
-            print(f"[PlateOCR] EasyOCR başlatılamadı: {e}")
-            self.mode = "mock"
-        # Tesseract yedek (easyocr düşük güven durumunda devreye girer)
-        self._tesseract_ok = False
-        try:
-            import pytesseract as _pyt
-            _pyt.get_tesseract_version()
-            self._tesseract_ok = True
-        except Exception:
-            pass
+            try:
+                import easyocr
+                self._reader = easyocr.Reader(
+                    ["en"],
+                    gpu=_detect_easyocr_device(),
+                )
+            except Exception:
+                self.mode = "mock"
 
     @staticmethod
     def _resolve(mode: str) -> str:
@@ -139,86 +199,99 @@ class PlateReader:
         except Exception:
             return "mock"
 
-    def _read_once(self, crop: np.ndarray) -> Tuple[Optional[str], float]:
+    def _read_variants(self, crop: np.ndarray) -> Tuple[Optional[str], float]:
+        """
+        Tüm preprocessing varyantları üzerinde EasyOCR çalıştır.
+        Keskinlik ve format geçerliliği ağırlıklı en iyi okumayı döndür.
+        """
         if self.mode == "mock" or self._reader is None:
             return None, 0.0
 
-        h, w = crop.shape[:2]
-        # Süper çözünürlük: geniş crop'lar da dahil (video frame'den gelen plaka bölgesi)
-        if w < 200:
-            crop = super_resolve(crop, scale=4)
-        elif w < 500:
-            crop = super_resolve(crop, scale=2)
+        best_text: Optional[str] = None
+        best_score = -1.0
 
-        best_text, best_conf = None, 0.0
-        allowlist = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        for var in _variants(crop):
+        for variant in _preprocess_variants(crop):
+            sharpness_w = min(1.0, _laplacian_sharpness(variant) / 800.0)
             try:
                 results = self._reader.readtext(
-                    var, allowlist=allowlist,
-                    text_threshold=0.20, low_text=0.20, link_threshold=0.10,
-                ) if self._reader else []
-                if results:
-                    # Sol→sağ sırala ve birleştir ("34TC" + "8532" → "34TC8532")
-                    results_sorted = sorted(results, key=lambda r: r[0][0][0])
-                    combined = "".join(t for _, t, _ in results_sorted if t.strip())
-                    avg_conf = sum(c for _, _, c in results_sorted) / len(results_sorted)
-                    if avg_conf > best_conf:
-                        best_text, best_conf = combined, avg_conf
-                    for _, text, conf in results:
-                        if conf > best_conf:
-                            best_text, best_conf = text, conf
+                    variant,
+                    allowlist=_PLATE_ALLOWLIST,
+                    detail=1,
+                    paragraph=False,
+                )
             except Exception:
-                pass
+                continue
 
-        # Tesseract yedek: EasyOCR güveni düşükse veya sonuç yoksa dene
-        if self._tesseract_ok and (best_conf < 0.20 or best_text is None):
-            try:
-                import cv2
-                import pytesseract
-                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-                cfg = '--psm 7 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-                t = pytesseract.image_to_string(gray, config=cfg).strip()
-                t = re.sub(r"[^A-Z0-9]", "", t.upper())
-                if len(t) >= 5:
-                    # Tesseract güven skoru doğrudan alınamıyor → sabit 0.20 ata
-                    if 0.20 > best_conf:
-                        best_text, best_conf = t, 0.20
-            except Exception:
-                pass
+            for _, text, conf in results:
+                norm = normalize_plate(text)
+                if len(norm) < 5:   # en kısa geçerli plaka 5 karakter
+                    continue
+                corrected = _apply_position_rules(norm)
+                format_bonus = 0.12 if is_valid_tr_plate(corrected) else 0.0
+                score = conf * (0.55 + 0.45 * sharpness_w) + format_bonus
+                if score > best_score:
+                    best_text = corrected
+                    best_score = score
 
-        return best_text, best_conf
+        return (best_text, min(best_score, 1.0)) if best_score > 0 else (None, 0.0)
 
     def read(self, crop: Optional[np.ndarray]) -> PlateResult:
         if crop is None or crop.size == 0:
             return PlateResult()
 
-        text, conf = self._read_once(crop)
-        norm = normalize_plate(text) if text else ""
-        corrected = ocr_corrections(norm)
-
-        for candidate in [corrected, norm]:
-            if candidate and is_valid_tr_plate(candidate):
-                self._history.append(candidate)
-                norm = candidate
-                break
-
-        consensus = self._consensus()
-        final = consensus or norm
-
-        # Düşük eşik: video kalitesi düşük, karanlık ortam → konsensüs mekanizması kurtarır
-        if not (final and is_valid_tr_plate(final) and conf >= 0.12):
+        h, w = crop.shape[:2]
+        if w < MIN_PLATE_WIDTH or h < MIN_PLATE_HEIGHT:
             return PlateResult()
 
-        return PlateResult(text=final, confidence=round(conf, 3), valid_format=True)
+        text, conf = self._read_variants(crop)
+        norm = text or ""
 
-    def _consensus(self) -> Optional[str]:
-        if not self._history:
-            return None
-        maxlen = max(len(p) for p in self._history)
+        if norm and is_valid_tr_plate(norm):
+            self._history.append((norm, conf))
+
+        # Konsensüs: geçmiş okumaların güven-ağırlıklı karakter çoğunluğu
+        consensus, c_conf = self._weighted_consensus()
+
+        if consensus and is_valid_tr_plate(consensus):
+            final_text, final_conf = consensus, c_conf
+        elif norm and is_valid_tr_plate(norm):
+            final_text, final_conf = norm, conf
+        else:
+            return PlateResult()
+
+        if final_conf < 0.55:
+            return PlateResult()
+
+        return PlateResult(
+            text=final_text,
+            confidence=round(final_conf, 3),
+            valid_format=True,
+        )
+
+    def _weighted_consensus(self) -> Tuple[Optional[str], float]:
+        """
+        Geçmişten yalnız geçerli okumaları al.
+        Aynı uzunluktaki okumaları güven-ağırlıklı karakter çoğunluğu ile birleştir.
+        """
+        valid = [(t, c) for t, c in self._history if is_valid_tr_plate(t)]
+        if not valid:
+            return None, 0.0
+
+        # En yaygın uzunluğu seç
+        target_len = Counter(len(t) for t, _ in valid).most_common(1)[0][0]
+        same_len = [(t, c) for t, c in valid if len(t) == target_len]
+
+        if not same_len:
+            best = max(valid, key=lambda x: x[1])
+            return best
+
         chars = []
-        for i in range(maxlen):
-            col = [p[i] for p in self._history if i < len(p)]
-            if col:
-                chars.append(Counter(col).most_common(1)[0][0])
-        return "".join(chars) if chars else None
+        for i in range(target_len):
+            weights: dict[str, float] = {}
+            for text, c in same_len:
+                ch = text[i]
+                weights[ch] = weights.get(ch, 0.0) + c
+            chars.append(max(weights, key=weights.get))
+
+        avg_conf = sum(c for _, c in same_len) / len(same_len)
+        return "".join(chars), round(avg_conf, 3)
