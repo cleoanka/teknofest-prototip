@@ -24,9 +24,9 @@ geri düşüren — **ihtiyaç-bazlı, uçtan uca akıllı yol güvenliği siste
 │   │  React Native + Expo │        │   Vanilla JS + getUserMedia  │  │
 │   │  iOS & Android       │        │   Güvenlik konsolu, overlay  │  │
 │   └──────────┬───────────┘        └──────────────┬───────────────┘  │
-└──────────────┼──────────────────────────────────┼───────────────────┘
+└──────────────┼───────────────────────────────────┼──────────────────┘
                │  REST / WebSocket / HLS           │
-               ▼                                  ▼
+               ▼                                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         BACKEND KATMANI                             │
 │                                                                     │
@@ -56,7 +56,7 @@ geri düşüren — **ihtiyaç-bazlı, uçtan uca akıllı yol güvenliği siste
 │  │ YOLOv8n/s    │  │ IOU takip  │  │ bbox-alan  │  │EasyOCR+    │   │
 │  │ (gerçek/mock)│  │ track_id   │  │ hız tahmini│  │konsensüs   │   │ 
 │  └──────┬───────┘  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘   │ 
-│         └────────────────┴───────────────┴───────────────┘          │
+│         └────────────────┴─────────┬─────┴───────────────┘          │
 │                                    │                                │
 │  ┌──────────────┐  ┌───────────────▼──────┐  ┌────────────────┐     │
 │  │driver_state  │  │     risk.py          │  │ qod_trigger.py │     │
