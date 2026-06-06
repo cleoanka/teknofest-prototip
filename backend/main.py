@@ -5,6 +5,7 @@ v1.1: JWT RS256, rate limiting, statistics, filtering, Prometheus
 v1.2: JWT key persistence, /api/settings, WS /ws/status, X-Total-Count, plate validation
 v1.3: GZip, güvenlik başlıkları, X-Request-ID, qod/proof, offset pagination
 v1.4: WS token auth, /api/health/deep, JSON loglama, X-Response-Time, OpenAPI tags
+v1.5: CORS expose_headers, /api/system/info, qod/sessions/{sid}, export plate filter
 """
 import asyncio
 import io
@@ -159,7 +160,7 @@ _OPENAPI_TAGS = [
 
 app = FastAPI(
     title="Akıllı Yol Güvenliği — 5G & YZ Backend",
-    version="1.4.0",
+    version="1.5.0",
     description=(
         "**TEKNOFEST 2026** · CAMARA QoD + Number Verification + YZ Risk Motoru\n\n"
         "- JWT RS256 kimlik doğrulama (`/.well-known/jwks.json`)\n"
@@ -182,7 +183,18 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(GZipMiddleware, minimum_size=500)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    # Özel response header'ların tarayıcı JS tarafından okunabilmesi için
+    expose_headers=[
+        "X-Total-Count", "X-Filtered-Count", "X-Offset",
+        "X-Request-ID", "X-Response-Time",
+        "Content-Disposition",
+    ],
+)
 
 
 @app.middleware("http")
@@ -267,6 +279,25 @@ async def qod_list_sessions(request: Request):
     return {"sessions": sessions, "count": len(sessions)}
 
 
+@app.get("/camara/qod/sessions/{sid}", tags=["camara"])
+@limiter.limit(f"{settings.rate_limit}/minute")
+async def qod_get_session(request: Request, sid: str):
+    """CAMARA QoD — tek oturum detayı."""
+    sess = state.qod.provider._sessions.get(sid)
+    if sess is None:
+        raise HTTPException(status_code=404, detail=f"QoD oturumu bulunamadı: {sid}")
+    return {
+        "sessionId": sess.id,
+        "device": sess.device,
+        "qosProfile": sess.qos_profile,
+        "requestedMbps": sess.requested_mbps,
+        "durationS": sess.duration_s,
+        "ageS": round(sess.age_s, 2),
+        "status": sess.status,
+        "expired": sess.expired(),
+    }
+
+
 @app.delete("/camara/qod/sessions/{sid}", tags=["camara"])
 @limiter.limit(f"{settings.rate_limit}/minute")
 async def qod_delete(request: Request, sid: str):
@@ -302,6 +333,52 @@ async def version_info():
         "uptime_s": round(time.time() - _start_time, 1),
         "build": "TEKNOFEST 2026",
     }
+
+
+@app.get("/api/system/info", tags=["system"])
+@limiter.limit(f"{settings.rate_limit}/minute")
+async def system_info(request: Request):
+    """
+    Sistem kaynak kullanımı — izleme ve performans takibi için.
+
+    RAM, CPU, disk kullanımı (psutil varsa), süreç bilgisi, açık dosya sayısı.
+    Yarışma jürisi bu endpoint ile sistemin kaynak verimliliğini doğrulayabilir.
+    """
+    info: dict = {
+        "uptime_s": round(time.time() - _start_time, 1),
+        "version": app.version,
+        "event_count": state.store.count(),
+        "ws_connections": len(state.subscribers),
+    }
+    try:
+        import psutil
+        proc = psutil.Process()
+        with proc.oneshot():
+            mem = proc.memory_info()
+            cpu_pct = proc.cpu_percent(interval=None)
+            open_files = len(proc.open_files())
+            threads = proc.num_threads()
+        vm = psutil.virtual_memory()
+        disk = psutil.disk_usage("/")
+        info["process"] = {
+            "rss_mb": round(mem.rss / 1024 / 1024, 1),
+            "vms_mb": round(mem.vms / 1024 / 1024, 1),
+            "cpu_pct": cpu_pct,
+            "threads": threads,
+            "open_files": open_files,
+        }
+        info["system"] = {
+            "total_ram_mb": round(vm.total / 1024 / 1024, 1),
+            "available_ram_mb": round(vm.available / 1024 / 1024, 1),
+            "ram_used_pct": vm.percent,
+            "disk_total_gb": round(disk.total / 1024 / 1024 / 1024, 1),
+            "disk_used_pct": round(disk.percent, 1),
+        }
+    except ImportError:
+        info["psutil"] = "not installed — pip install psutil for resource metrics"
+    except Exception as exc:
+        info["psutil_error"] = str(exc)
+    return info
 
 
 @app.get("/api/health", tags=["system"])
@@ -448,12 +525,16 @@ async def events_export(
     to_ts: Optional[float] = Query(default=None),
     level: Optional[str] = Query(default=None),
     vtype: Optional[str] = Query(default=None),
+    plate: Optional[str] = Query(default=None, description="Plaka kısmi eşleşme filtresi"),
+    sort_by: str = Query(default="ts", description="Sıralama alanı"),
+    sort_dir: str = Query(default="desc", description="asc|desc"),
     _auth: Optional[dict] = Depends(require_auth),
 ):
     """Tüm olayları CSV formatında indir — jüri değerlendirmesi için."""
     evs = state.store.list(
         limit=10000, min_score=min_score,
         from_ts=from_ts, to_ts=to_ts, level=level, vtype=vtype,
+        plate=plate, sort_by=sort_by, sort_dir=sort_dir,
     )
     output = io.StringIO()
     writer = csv.writer(output)

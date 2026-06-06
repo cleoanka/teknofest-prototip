@@ -50,6 +50,10 @@
 | POST /api/events/test | ✅ | Demo test olay enjeksiyonu; count/risk_level/plate_prefix ayarlanabilir |
 | DELETE /api/events/{id} | ✅ | Tek olay ID ile silme, 404 koruması |
 | /api/ping | ✅ | Ultralight gecikme ölçümü; sadece epoch timestamp döner |
+| CORS expose_headers | ✅ | X-Total-Count/X-Filtered-Count/X-Offset/X-Request-ID tarayıcıda okunabilir |
+| /api/system/info | ✅ | psutil: RSS/VMS/CPU/threads/disk; psutil yoksa graceful not |
+| GET /camara/qod/sessions/{sid} | ✅ | Tek QoD oturumu detayı — CAMARA CRUD tamamlandı |
+| /api/events/export plate filtresi | ✅ | plate + sort_by/sort_dir export'a eklendi |
 
 ---
 
@@ -109,7 +113,7 @@ Filtre parametrelerini destekliyor (from_ts, to_ts, level, vtype).
 ```
 Son çalıştırma: 2026-06-06
 Durum: TÜM TESTLER YEŞİL ✅
-Toplam test: 233 (73 eski → 233 yeni)
+Toplam test: 248 (73 eski → 248 yeni)
 Ortam: AI_MODE=mock, DB=:memory:
 ```
 
@@ -136,6 +140,7 @@ Ortam: AI_MODE=mock, DB=:memory:
 | test_sort_pagination_version.py | 17 | events sort, vehicles pagination, /api/version |
 | test_plate_search_delete_timeline.py | 18 | plate filtresi, bulk delete, demo-token, timeline |
 | test_heatmap_inject_delete_ping.py | 17 | heatmap, test inject, single delete, ping |
+| test_v15_features.py | 15 | CORS expose, system/info, qod/{sid}, export plate |
 | test_ws_e2e.py | 4 | WS ingest/detections/broadcast uçtan uca |
 
 ---
