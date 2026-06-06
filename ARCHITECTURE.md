@@ -30,18 +30,18 @@ geri düşüren — **ihtiyaç-bazlı, uçtan uca akıllı yol güvenliği siste
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         BACKEND KATMANI                             │
 │                                                                     │
-│   FastAPI 0.115 + Uvicorn · async WebSocket · Pydantic şema        │
+│   FastAPI 0.115 + Uvicorn · async WebSocket · Pydantic şema         │
 │                                                                     │
-│   ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐    │
-│   │  main.py    │  │ qod_manager  │  │  camara/               │    │
-│   │  REST + WS  │  │ Tetik→CAMARA │  │  qod.py + numverif.py  │    │
-│   │  uç noktalar│  │  köprüsü     │  │  (mock → gerçek API)   │    │
-│   └──────┬──────┘  └──────┬───────┘  └────────────┬───────────┘    │
+│   ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐     │
+│   │  main.py    │  │ qod_manager  │  │  camara/               │     │
+│   │  REST + WS  │  │ Tetik→CAMARA │  │  qod.py + numverif.py  │     │
+│   │  uç noktalar│  │  köprüsü     │  │  (mock → gerçek API)   │     │
+│   └──────┬──────┘  └──────┬───────┘  └────────────┬───────────┘     │
 │          │                │                        │                │
-│   ┌──────▼──────┐  ┌──────▼───────┐        ┌──────▼───────┐        │
-│   │   db.py     │  │  frames.py   │        │  Turkcell    │        │
-│   │   SQLite    │  │  base64→BGR  │        │  5G Şebekesi │        │
-│   └─────────────┘  └──────┬───────┘        └──────────────┘        │
+│   ┌──────▼──────┐  ┌──────▼───────┐        ┌──────▼───────┐         │
+│   │   db.py     │  │  frames.py   │        │  Turkcell    │         │
+│   │   SQLite    │  │  base64→BGR  │        │  5G Şebekesi │         │
+│   └─────────────┘  └──────┬───────┘        └──────────────┘         │
 └──────────────────────────┼──────────────────────────────────────────┘
                            │  ham kare (numpy BGR)
                            ▼
@@ -50,19 +50,19 @@ geri düşüren — **ihtiyaç-bazlı, uçtan uca akıllı yol güvenliği siste
 │                                                                     │
 │   Pipeline.process(frame, critical) → (FrameResult, TriggerContext) │
 │                                                                     │
-│  ┌──────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  │
-│  │ detector.py  │  │tracking.py │  │  speed.py  │  │plate_ocr.py│  │
-│  │ YOLOv8n/s    │  │ IOU takip  │  │ bbox-alan  │  │EasyOCR+    │  │
-│  │ (gerçek/mock)│  │ track_id   │  │ hız tahmini│  │konsensüs   │  │
-│  └──────┬───────┘  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘  │
+│  ┌──────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐   │
+│  │ detector.py  │  │tracking.py │  │  speed.py  │  │plate_ocr.py│   │
+│  │ YOLOv8n/s    │  │ IOU takip  │  │ bbox-alan  │  │EasyOCR+    │   │
+│  │ (gerçek/mock)│  │ track_id   │  │ hız tahmini│  │konsensüs   │   │ 
+│  └──────┬───────┘  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘   │ 
 │         └────────────────┴────────────────┴───────────────┘         │
 │                                    │                                │
-│  ┌──────────────┐  ┌───────────────▼──────┐  ┌────────────────┐    │
-│  │driver_state  │  │     risk.py          │  │ qod_trigger.py │    │
-│  │MediaPipe     │  │  Ağırlıklı 0–100     │  │  A–E koşul     │    │
-│  │EAR/PERCLOS   │  │  skor motoru         │  │  motoru (%40   │    │
-│  │telefon/sigara│  │                      │  │  kriter beyni) │    │
-│  └──────────────┘  └──────────────────────┘  └────────────────┘    │
+│  ┌──────────────┐  ┌───────────────▼──────┐  ┌────────────────┐     │
+│  │driver_state  │  │     risk.py          │  │ qod_trigger.py │     │
+│  │MediaPipe     │  │  Ağırlıklı 0–100     │  │  A–E koşul     │     │
+│  │EAR/PERCLOS   │  │  skor motoru         │  │  motoru (%40   │     │
+│  │telefon/sigara│  │                      │  │  kriter beyni) │     │
+│  └──────────────┘  └──────────────────────┘  └────────────────┘     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
