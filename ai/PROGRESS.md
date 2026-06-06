@@ -10,6 +10,64 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 
 ## 1. Mevcut Durum (son güncelleme: 2026-06-06)
 
+### MediaPipe loş/küçük crop iyileştirmesi (2026-06-06)
+- **Ne:** `driver_state._enhance()` eklendi — kabin crop'u MediaPipe'a verilmeden önce
+  **gamma+CLAHE ile aydınlatılır** (karanlıksa) ve **büyütülür** (genişlik < `mp_min_crop_px`).
+  Yüz mesh + cabin (Hands) + seatbelt (Pose) + sigara heuristiği **aynı iyileştirilmiş crop'u**
+  paylaşır (tek geçiş, koordinat tutarlı). Eşikler: `mp_enhance_enabled/_dark_below`, `mp_min_crop_px`.
+- **Neden:** gerçek test verisi (kapalı otopark, 4K sabit dış kamera) loş ve sürücü camın ardında
+  küçük → ham 4K karede MediaPipe yüzü **%0-8** buluyordu (içeride küçültünce minik yüz kayboluyor).
+- **Ölçüm (gerçek video_3, kabin crop'u, AI_MODE=real):**
+  - Ham 4K tam kare: yüz **%0**.
+  - Ham loş kabin crop'u + **modül-içi `_enhance`**: yüz **7/34 kare (~%21)** — elle işlem YOK.
+  - (Kalan kareler: araç dönüyor, sürücü kameraya bakmıyor — beklenen.)
+- **Sözleşme:** crop iyileştirme modülün içinde; **takım arkadaşının YOLO crop'u** geldiğinde
+  otomatik devreye girer. Mock fallback korunur (cv2 yoksa crop'u olduğu gibi döndürür). **259 test yeşil.**
+- **Not:** plaka OCR **bizim kapsamımız dışı** (başka kol). Bu kol yalnız MediaPipe kabin/sürücü.
+
+### Ortam + MediaPipe sürüm düzeltmesi (2026-06-06)
+- **Ne:** Windows makinesine Python 3.12.10 + `.venv` kuruldu; çekirdek bağımlılıklar + mediapipe.
+  **`requirements.txt`: `mediapipe==0.10.35` → `0.10.14`.**
+- **Neden (KRİTİK BULGU):** mediapipe **0.10.30+** sürümlerinde legacy `mp.solutions` API'si
+  (face_mesh/hands/pose) **kaldırılmış**; wheel'de `mediapipe.python` yok. Bu yüzden 0.10.35 ile
+  `driver_state` yorgunluk kodu (mevcut) + yeni `mp_cabin`/`mp_seatbelt` **gerçek modda sessizce
+  mock'a düşüyordu**. 0.10.14 legacy solutions'ı içeriyor → üç model de yükleniyor.
+- **Doğrulama:** gerçek-mod duman testi → `cabin: real | seatbelt: real`, `assess()` çökmüyor;
+  kemer çapraz-şerit CV testi `belt_on=True score=0.819`, dik çizgi `False`. Mock paket: **259 yeşil**.
+- **Açık iş:** gerçek video ile (sürücü yüzü/eli/gövdesi görünür) tespit isabeti + FPS ölçümü.
+
+### Son ekleme — Emniyet Kemeri Heuristiği (2026-06-06)
+- **Ne:** Yeni kapsüllü modül `ai/mp_seatbelt.py` (MediaPipe **Pose** → omuz/kalça gövde ROI →
+  Canny+Hough ile **çapraz kemer şeridi** araması). `driver_state.py` sonucu `no_seatbelt`
+  bayrağına bağlar; yeni `DriverState.seatbelt_on` (None=bilinmiyor / True=takılı / False=yok).
+  `risk.py` `no_seatbelt`'i zaten ağırlıklıyor (15p) → kemer yokluğu otomatik risk faktörü.
+- **Neden:** COCO'da kemer sınıfı yok, fine-tune gelmedi (R2). Kemer gövdeyi çapraz kesen
+  belirgin şerit → eğitimsiz CV ile yakalanabilir; fine-tune gelene kadar köprü.
+- **Tasarım:** tek arayüz `SeatbeltDetector.detect(roi)`; MediaPipe/cv2 yoksa **mock**, bayrak
+  üretmez (K4). Eşikler `config/settings.py` (`seatbelt_*`). **Muhafazakâr:** gövde net değilse
+  ya da kemer "var" sinyali varsa `no_seatbelt` tetiklenmez; ardışık-kare debounce ile süzülür.
+- **Not (dürüstlük):** HEURISTIC — desenli kıyafet/gölge yanlış pozitif, koyu kemer yanlış negatif
+  verebilir. Kesin çözüm `ai/training/` kemer sınıfı fine-tune. Test: `tests/test_mp_seatbelt.py`.
+- **Ölçüm:** ⏳ `make test` + gerçek videoda doğrulanacak (bu makinede Python yok).
+
+### Son ekleme — MediaPipe Kabin Füzyonu (2026-06-06)
+- **Ne:** Yeni kapsüllü modül `ai/mp_cabin.py` (MediaPipe **Hands** → el-kulak/ağız yakınlığı).
+  `driver_state.py` bu sinyali YOLO ile **VEYA**'lar (sensör füzyonu): `el→kulak ⇒ phone_use`,
+  `el→ağız ⇒ smoking`. Ayrıca tek yüz-mesh geçişinden **sürücü varlığı** + **geometrik yüz imzası**
+  (sürücü-değişti tespiti) çıkarıldı. Yeni `DriverState` alanları: `driver_present, hands_detected,
+  hand_near_ear, hand_near_mouth, driver_signature, driver_changed`.
+- **Neden:** sigara/kulaklık COCO'da yok, telefon küçük/elle kapalı → YOLO kaçırıyordu; el iskeleti
+  davranışı nesneyi görmeden yakalar (recall↑). Veri zaten `FrameResult` ile API/WS'e akıyor.
+- **Tasarım:** tam kapsüllü, tek arayüz `CabinAnalyzer.analyze(roi, mouth, ears, face_w)`; MediaPipe
+  yoksa **mock'a düşer ve sahte sinyal üretmez** (K4). Tüm eşikler `config/settings.py` (`mp_*`).
+  Ardışık-kare debounce (`mp_cabin_persist_frames`) ile titreme süzülür.
+- **Not (dürüstlük):** `driver_signature` **biyometrik kimlik DEĞİL** — yalnız "aynı sürücü mü değişti mi".
+  Gerçek tanıma için ayrı yüz-embedding modeli (ör. ArcFace) gerekir.
+- **Ölçüm:** ⏳ bekliyor — `make test` (mock) bu makinede Python kurulu olmadığı için koşulamadı;
+  geliştirme ortamında `make test` + 3 test videosunda FPS/tespit oranı alınacak. Test eklendi:
+  `tests/test_mp_cabin.py`.
+
+
 **Genel:**
 - Prototip repo **temel alındı**; uzak `cleoanka/teknofest-prototip` ile senkron (K7 akışı).
 - YZ hattı **uçtan uca çalışıyor**: mock (73 test yeşil) **ve** gerçek GPU (CUDA torch + YOLOv8) doğrulandı.

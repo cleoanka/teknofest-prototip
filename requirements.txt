@@ -26,7 +26,10 @@ pillow==11.0.0
 ultralytics==8.3.55        # YOLOv8/v11 — araç + araç içi nesne tespiti
 easyocr==1.7.2             # Plaka OCR birincil
 pytesseract>=0.3.10        # Tesseract yedek OCR (brew install tesseract gerekir)
-mediapipe==0.10.35         # Yüz mesh -> EAR/PERCLOS yorgunluk
+mediapipe==0.10.14         # Yüz mesh/eller/poz -> yorgunluk + el-yüz füzyonu + kemer
+                           # NOT: 0.10.30+ sürümlerde legacy `mp.solutions` API KALDIRILDI
+                           # (face_mesh/hands/pose). Kodumuz solutions kullandığı için 0.10.14'e
+                           # sabitlendi. Tasks API'ye geçilirse bu pin gevşetilebilir.
 huggingface_hub>=0.20.0    # keremberke/yolov8n-license-plate-detection indirme
 
 # Test

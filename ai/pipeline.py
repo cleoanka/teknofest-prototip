@@ -87,7 +87,7 @@ class Pipeline:
         self.detector = detector or build_detector(self.s)
         self.tracker = IOUTracker()
         self.plate_reader = PlateReader(mode=self.s.ai_mode)
-        self.driver = DriverMonitor(mode=self.s.ai_mode)
+        self.driver = DriverMonitor(mode=self.s.ai_mode, settings=self.s)
         self.lp_detector = get_lp_detector()
         self._last_t = time.time()
         self._frame_id = 0

@@ -94,12 +94,36 @@ def annotate_frame(frame: np.ndarray, result_dict: dict) -> np.ndarray:
         draw_box(annotated, pbbox["x1"], pbbox["y1"], pbbox["x2"], pbbox["y2"],
                  CLR_PLATE, f"PLAKA: {plate_text}", thickness=2)
 
-    # Sürücü ROI (mavi)
+    # Sürücü ROI (mavi) + MediaPipe el-yüz füzyon rozetleri
     dbbox = vehicle.get("driver_bbox")
     if dbbox:
-        phone_label = " [TELEFON!]" if driver_state.get("phone_use") else ""
+        badges = []
+        if driver_state.get("phone_use"):
+            badges.append("TELEFON")
+        if driver_state.get("smoking"):
+            badges.append("SİGARA")
+        if driver_state.get("headphone"):
+            badges.append("KULAKLIK")
+        if driver_state.get("hand_near_ear"):
+            badges.append("el→kulak")     # MediaPipe Hands kanıtı
+        if driver_state.get("hand_near_mouth"):
+            badges.append("el→ağız")
+        if driver_state.get("no_seatbelt"):
+            badges.append("KEMER YOK")
+        elif driver_state.get("seatbelt_on") is True:
+            badges.append("kemer✓")
+        hands = driver_state.get("hands_detected", 0)
+        sig = driver_state.get("driver_signature") or "-"
+        present = "✓" if driver_state.get("driver_present") else "✗"
+        suffix = (" [" + ", ".join(badges) + "]") if badges else ""
         draw_box(annotated, dbbox["x1"], dbbox["y1"], dbbox["x2"], dbbox["y2"],
-                 CLR_DRIVER, f"SÜRÜCÜ{phone_label}", thickness=1)
+                 CLR_DRIVER, f"SÜRÜCÜ{suffix}", thickness=1)
+        cv2.putText(annotated, f"yuz:{present} el:{hands} id:{sig}",
+                    (int(dbbox["x1"]), int(dbbox["y1"]) - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, CLR_DRIVER, 1, cv2.LINE_AA)
+        if driver_state.get("driver_changed"):
+            cv2.putText(annotated, "SÜRÜCÜ DEĞİŞTİ", (int(dbbox["x1"]), int(dbbox["y2"]) + 18),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2, cv2.LINE_AA)
 
     # Yolcu ROI (turuncu)
     psbbox = vehicle.get("passenger_bbox")
