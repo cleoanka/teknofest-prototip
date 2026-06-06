@@ -77,8 +77,11 @@ class Vehicle(BaseModel):
     # göreceli sezgisel mi? (gercek_hiz_plani.md §7.4 — raporlamada karışmasın)
     speed_is_calibrated: bool = False
     bbox: Optional[BBox] = None
-    plate_bbox: Optional[BBox] = None          # Plaka kutusu (sarı)
+    plate_bbox: Optional[BBox] = None          # Plaka kutusu — bounding rect (sarı)
     plate_pixel_width: Optional[float] = None  # px genişlik — mesafe kalibrasyonu (52cm / px_w)
+    # 4-köşe perspektif çerçevesi: [[x0,y0],[x1,y1],[x2,y2],[x3,y3]] TL→TR→BR→BL sırası.
+    # plate_bbox'tan farklı olarak yamuk plakaları gerçek şekliyle temsil eder (görselleştirme).
+    plate_corners: Optional[List[List[float]]] = None
     driver_bbox: Optional[BBox] = None         # Sürücü tarafı ROI (mavi)
     passenger_bbox: Optional[BBox] = None      # Yolcu tarafı ROI (turuncu)
     swerving: bool = False                     # Zigzag/şerit ihlali
