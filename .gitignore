@@ -21,6 +21,7 @@ mock/*.mp4
 # Sunucu runtime dosyaları
 .server.pid
 server.log
+server.out.log
 
 # Eğitim verisi ve geçici değerlendirme çıktıları (büyük; yeniden üretilebilir)
 datasets/
