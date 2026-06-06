@@ -65,6 +65,38 @@ def test_curriculum_on_adds_warmup_and_chains():
     assert main.aug == FULL_AUG
 
 
+def test_gentle_main_stage_uses_soft_recipe():
+    # Bulgu K-008: nazik reçete → hafif aug + düşük lr0 + cos_lr (öneğitimli özellikleri korur)
+    stages = build_curriculum(curriculum=True, gentle=True, **_common())
+    warm, main = stages
+    assert warm.aug == LIGHT_AUG          # ısınma her durumda hafif
+    assert main.aug == LIGHT_AUG          # nazik ana aşama da hafif (FULL_AUG değil)
+    assert main.lr0 == 0.002
+    assert main.cos_lr is True
+    kw = main.train_kwargs()
+    assert kw["lr0"] == 0.002 and kw["cos_lr"] is True
+
+
+def test_gentle_off_keeps_full_aug():
+    # gentle=False (varsayılan) → ana aşama tam augmentation, lr0 None (varsayılan)
+    stages = build_curriculum(curriculum=True, gentle=False, **_common())
+    main = stages[-1]
+    assert main.aug == FULL_AUG
+    assert main.lr0 is None and main.cos_lr is False
+    assert "cos_lr" not in main.train_kwargs()
+
+
+def test_main_freeze_applies_to_main_stage():
+    # K-008 derinleşmesi: omurga ana aşamada da donuk → genelleme korunur (küçük veri)
+    stages = build_curriculum(curriculum=False, gentle=True, main_freeze=10, **_common())
+    main = stages[0]
+    assert main.freeze == 10
+    assert main.train_kwargs()["freeze"] == 10
+    # main_freeze None ise ana aşama dondurmaz
+    stages2 = build_curriculum(curriculum=False, gentle=True, **_common())
+    assert stages2[0].freeze is None
+
+
 def test_field_adaptation_stage_appended():
     stages = build_curriculum(curriculum=True, field_data="saha.yaml", **_common())
     assert len(stages) == 3
