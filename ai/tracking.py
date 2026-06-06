@@ -33,16 +33,41 @@ class Track:
     bbox: Tuple[float, float, float, float]
     area_history: deque = field(default_factory=lambda: deque(maxlen=12))
     center_history: deque = field(default_factory=lambda: deque(maxlen=12))
+    # Yer-temas noktası (bbox alt-orta piksel) geçmişi — aracın yere değdiği nokta.
+    # Metrik hız ppm(y)/homografi yer düzlemi hesabı bu noktayı kullanır (§7.2).
+    foot_history: deque = field(default_factory=lambda: deque(maxlen=12))
+    # Her güncellemenin VİDEO ZAMAN ÇİZGİSİ damgası (s) — PTS/client_ts; yoksa None.
+    # area/center/foot_history ile paralel; metrik hız için "gerçek Δt" buradan gelir.
+    ts_history: deque = field(default_factory=lambda: deque(maxlen=12))
     misses: int = 0
     hits: int = 1
 
-    def update(self, bbox: Tuple[float, float, float, float]) -> None:
+    def update(self, bbox: Tuple[float, float, float, float],
+               ts: float | None = None) -> None:
         self.bbox = bbox
         x1, y1, x2, y2 = bbox
         self.area_history.append(max(0.0, x2 - x1) * max(0.0, y2 - y1))
         self.center_history.append(((x1 + x2) / 2, (y1 + y2) / 2))
+        self.foot_history.append(((x1 + x2) / 2, y2))
+        self.ts_history.append(ts)
         self.misses = 0
         self.hits += 1
+
+    def dt_last(self) -> float | None:
+        """Son iki güncelleme arasında YERDEKİ gerçek geçen süre (s).
+
+        Karelerin nominal 1/fps aralığını DEĞİL, fiilen damgalanmış iki örnek
+        arasındaki süreyi döndürür; böylece düşürülen kareler (track birkaç
+        kare 'miss' olup sonra güncellendiğinde) doğru çok-kareli Δt verir.
+        Zaman damgası yoksa (None) ya da süre artmıyorsa None döner.
+        """
+        if len(self.ts_history) < 2:
+            return None
+        t_prev, t_cur = self.ts_history[-2], self.ts_history[-1]
+        if t_prev is None or t_cur is None:
+            return None
+        dt = t_cur - t_prev
+        return dt if dt > 0 else None
 
     def area_growth_ratio(self) -> float:
         """Son ölçümün, birkaç kare önceye göre alan büyüme oranı (yaklaşma sinyali)."""
@@ -100,8 +125,13 @@ class IOUTracker:
         self._next_id = 1
         self.tracks: Dict[int, Track] = {}
 
-    def update(self, boxes: List[Tuple[float, float, float, float]]) -> List[int]:
-        """boxes -> her kutuya karşılık gelen track_id listesi (sırayı korur)."""
+    def update(self, boxes: List[Tuple[float, float, float, float]],
+               ts: float | None = None) -> List[int]:
+        """boxes -> her kutuya karşılık gelen track_id listesi (sırayı korur).
+
+        ts: bu karenin video-zaman çizgisi damgası (s, PTS/client_ts). Eşleşen
+        ve yeni track'lere yazılır; metrik hız Δt'si için kullanılır.
+        """
         assigned: Dict[int, int] = {}      # box_index -> track_id
         used_tracks = set()
 
@@ -118,7 +148,7 @@ class IOUTracker:
                 continue
             assigned[bi] = tid
             used_tracks.add(tid)
-            self.tracks[tid].update(boxes[bi])
+            self.tracks[tid].update(boxes[bi], ts=ts)
 
         # Eşleşmeyen kutulara yeni track
         for bi, box in enumerate(boxes):
@@ -126,7 +156,7 @@ class IOUTracker:
                 tid = self._next_id
                 self._next_id += 1
                 tr = Track(track_id=tid, bbox=box)
-                tr.update(box)
+                tr.update(box, ts=ts)
                 self.tracks[tid] = tr
                 assigned[bi] = tid
 

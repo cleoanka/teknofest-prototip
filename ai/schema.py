@@ -73,6 +73,9 @@ class Vehicle(BaseModel):
     color: Optional[str] = None
     plate: PlateResult = Field(default_factory=PlateResult)
     speed_kmh: Optional[float] = None
+    # Hız gerçek metrik km/h mi (oto-kalibrasyon kuruldu) yoksa kalibrasyonsuz
+    # göreceli sezgisel mi? (gercek_hiz_plani.md §7.4 — raporlamada karışmasın)
+    speed_is_calibrated: bool = False
     bbox: Optional[BBox] = None
     plate_bbox: Optional[BBox] = None          # Plaka kutusu (sarı)
     plate_pixel_width: Optional[float] = None  # px genişlik — mesafe kalibrasyonu (52cm / px_w)
