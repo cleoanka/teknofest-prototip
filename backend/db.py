@@ -80,6 +80,7 @@ class EventStore:
         to_ts: Optional[float] = None,
         level: Optional[str] = None,
         vtype: Optional[str] = None,
+        plate: Optional[str] = None,
         sort_by: str = "ts",
         sort_dir: str = "desc",
     ) -> List[EventRecord]:
@@ -99,6 +100,9 @@ class EventStore:
         if vtype is not None:
             q += " AND vtype = ?"
             params.append(vtype)
+        if plate is not None:
+            q += " AND plate LIKE ?"
+            params.append(f"%{plate.upper()}%")
         # col ve direction whitelist'ten geçti — SQL injection riski yok
         q += f" ORDER BY {col} {direction.upper()} LIMIT ? OFFSET ?"
         params.append(limit)
@@ -114,6 +118,7 @@ class EventStore:
         to_ts: Optional[float] = None,
         level: Optional[str] = None,
         vtype: Optional[str] = None,
+        plate: Optional[str] = None,
     ) -> int:
         """Filtre uygulanmış toplam olay sayısı — pagination için."""
         q = "SELECT COUNT(*) FROM events WHERE risk_score >= ?"
@@ -130,9 +135,44 @@ class EventStore:
         if vtype is not None:
             q += " AND vtype = ?"
             params.append(vtype)
+        if plate is not None:
+            q += " AND plate LIKE ?"
+            params.append(f"%{plate.upper()}%")
         with self._lock:
             row = self._conn.execute(q, params).fetchone()
         return row[0]
+
+    def delete_filtered(
+        self,
+        min_score: int = 0,
+        from_ts: Optional[float] = None,
+        to_ts: Optional[float] = None,
+        level: Optional[str] = None,
+        vtype: Optional[str] = None,
+        plate: Optional[str] = None,
+    ) -> int:
+        """Filtreye uyan olayları sil — silinen kayıt sayısını döndürür."""
+        q = "DELETE FROM events WHERE risk_score >= ?"
+        params: list = [min_score]
+        if from_ts is not None:
+            q += " AND ts >= ?"
+            params.append(from_ts)
+        if to_ts is not None:
+            q += " AND ts <= ?"
+            params.append(to_ts)
+        if level is not None and level in _VALID_LEVELS:
+            q += " AND risk_level = ?"
+            params.append(level)
+        if vtype is not None:
+            q += " AND vtype = ?"
+            params.append(vtype)
+        if plate is not None:
+            q += " AND plate LIKE ?"
+            params.append(f"%{plate.upper()}%")
+        with self._lock:
+            cur = self._conn.execute(q, params)
+            self._conn.commit()
+        return cur.rowcount
 
     def vehicles(self, limit: int = 50, offset: int = 0) -> List[dict]:
         with self._lock:

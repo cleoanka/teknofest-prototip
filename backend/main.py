@@ -394,6 +394,7 @@ async def events(
     to_ts: Optional[float] = Query(default=None, description="Bitiş timestamp (epoch saniye)"),
     level: Optional[str] = Query(default=None, description="Risk seviyesi: LOW|MEDIUM|HIGH|CRITICAL"),
     vtype: Optional[str] = Query(default=None, description="Araç tipi: car|truck|bus|motorcycle"),
+    plate: Optional[str] = Query(default=None, description="Plaka içerik araması (kısmi eşleşme, ör: '34A')"),
     sort_by: str = Query(default="ts", description="Sıralama alanı: ts|risk_score|speed_kmh|id"),
     sort_dir: str = Query(default="desc", description="Sıralama yönü: asc|desc"),
     _auth: Optional[dict] = Depends(require_auth),
@@ -402,10 +403,10 @@ async def events(
     evs = state.store.list(
         limit=limit, offset=offset, min_score=min_score,
         from_ts=from_ts, to_ts=to_ts, level=level, vtype=vtype,
-        sort_by=sort_by, sort_dir=sort_dir,
+        plate=plate, sort_by=sort_by, sort_dir=sort_dir,
     )
     filtered_total = state.store.count_filtered(
-        min_score=min_score, from_ts=from_ts, to_ts=to_ts, level=level, vtype=vtype,
+        min_score=min_score, from_ts=from_ts, to_ts=to_ts, level=level, vtype=vtype, plate=plate,
     )
     response = JSONResponse(content=[e.model_dump() for e in evs])
     response.headers["X-Total-Count"] = str(state.store.count())
@@ -461,6 +462,37 @@ async def events_export(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=events.csv"},
     )
+
+
+@app.delete("/api/events", tags=["events"])
+@limiter.limit(f"{settings.rate_limit}/minute")
+async def events_bulk_delete(
+    request: Request,
+    confirm: bool = Query(default=False, description="Silme işlemini onaylamak için true gönderin"),
+    level: Optional[str] = Query(default=None, description="Sadece bu risk seviyesini sil"),
+    min_score: int = Query(default=0, ge=0, le=100),
+    from_ts: Optional[float] = Query(default=None),
+    to_ts: Optional[float] = Query(default=None),
+    vtype: Optional[str] = Query(default=None),
+    plate: Optional[str] = Query(default=None),
+    _auth: Optional[dict] = Depends(require_auth),
+):
+    """
+    Toplu olay silme — filtre koşullarına uyan olayları siler.
+
+    ?confirm=true zorunludur. Filtre belirtilmezse TÜM olaylar silinir.
+    Demo sonrası veritabanını temizlemek için kullanın.
+    """
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Silme işlemi için ?confirm=true parametresi zorunludur",
+        )
+    deleted = state.store.delete_filtered(
+        min_score=min_score, from_ts=from_ts, to_ts=to_ts,
+        level=level, vtype=vtype, plate=plate,
+    )
+    return {"deleted": deleted, "remaining": state.store.count()}
 
 
 @app.get("/api/events/{event_id}", tags=["events"])
@@ -560,6 +592,50 @@ async def vehicles(
     response.headers["X-Total-Count"] = str(state.store.vehicles_count())
     response.headers["X-Offset"] = str(offset)
     return response
+
+
+@app.get("/api/vehicles/{plate}/timeline", tags=["vehicles"])
+@limiter.limit(f"{settings.rate_limit}/minute")
+async def vehicle_timeline(
+    request: Request,
+    plate: str,
+    hours: int = Query(default=24, ge=1, le=168, description="Son kaç saatin zaman serisi"),
+    _auth: Optional[dict] = Depends(require_auth),
+):
+    """
+    Plakanın saatlik risk zaman serisi — güvenlik analistleri için.
+
+    Her saat için: olay sayısı, ortalama hız, maksimum risk skoru.
+    """
+    validated = _validate_plate(plate)
+    since = time.time() - hours * 3600
+    evs = state.store.vehicles_by_plate(validated, limit=10000)
+    evs_in_range = [e for e in evs if e.ts >= since]
+
+    # Saatlik gruplama
+    buckets: dict[int, list] = {}
+    for e in evs_in_range:
+        h = int((e.ts - since) / 3600)
+        buckets.setdefault(h, []).append(e)
+
+    timeline = []
+    for h in sorted(buckets):
+        group = buckets[h]
+        speeds = [e.speed_kmh for e in group if e.speed_kmh is not None]
+        timeline.append({
+            "hour_offset": h,
+            "count": len(group),
+            "avg_speed_kmh": round(sum(speeds) / len(speeds), 1) if speeds else None,
+            "max_risk_score": max(e.risk_score for e in group),
+            "risk_levels": list({e.risk_level for e in group}),
+        })
+
+    return {
+        "plate": validated,
+        "hours": hours,
+        "event_count": len(evs_in_range),
+        "timeline": timeline,
+    }
 
 
 @app.get("/api/vehicles/{plate}", tags=["vehicles"])
@@ -673,6 +749,30 @@ async def jwks():
         "issuer": "5g-roadguard",
         "algorithm": "RS256",
         "public_key_pem": get_jwt_manager().public_key_pem(),
+    }
+
+
+@app.post("/api/demo-token", tags=["auth"])
+@limiter.limit("10/minute")
+async def demo_token(request: Request, sub: str = "demo-user"):
+    """
+    Demo JWT üret — jüri sunumu ve geliştirme ortamı için.
+
+    REQUIRE_AUTH=true modunda devre dışıdır. Swagger'dan `Authorize` düğmesine
+    kopyalanarak tüm auth korumalı endpoint'ler test edilebilir.
+    """
+    s = get_settings()
+    if s.require_auth:
+        raise HTTPException(
+            status_code=403,
+            detail="Demo token sadece require_auth=False modda çalışır",
+        )
+    token = get_jwt_manager().issue(sub, extra={"role": "demo"})
+    return {
+        "token": token,
+        "sub": sub,
+        "ttl_s": s.jwt_ttl_s,
+        "usage": f"Authorization: Bearer {token[:20]}...",
     }
 
 

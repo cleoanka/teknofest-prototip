@@ -42,6 +42,10 @@
 | /api/events sort_by/sort_dir | ✅ | ts/risk_score/speed_kmh/id × asc/desc; whitelist SQL injection koruması |
 | /api/vehicles offset pagination | ✅ | offset param + X-Total-Count (benzersiz plaka sayısı) header |
 | /api/version | ✅ | Python versiyonu, platform, ai_mode, camara_mode, uptime_s |
+| /api/events plate filtresi | ✅ | Kısmi eşleşme LIKE sorgusu (büyük/küçük harf duyarsız) |
+| DELETE /api/events (bulk) | ✅ | confirm=true + filtre parametreleri; döner: deleted + remaining |
+| /api/demo-token | ✅ | require_auth=False modda hızlı JWT üretimi — jüri sunumu için |
+| /api/vehicles/{plate}/timeline | ✅ | Saatlik risk zaman serisi; avg_speed, max_risk, risk_levels |
 
 ---
 
@@ -101,7 +105,7 @@ Filtre parametrelerini destekliyor (from_ts, to_ts, level, vtype).
 ```
 Son çalıştırma: 2026-06-06
 Durum: TÜM TESTLER YEŞİL ✅
-Toplam test: 198 (73 eski → 198 yeni)
+Toplam test: 216 (73 eski → 216 yeni)
 Ortam: AI_MODE=mock, DB=:memory:
 ```
 
@@ -126,6 +130,7 @@ Ortam: AI_MODE=mock, DB=:memory:
 | test_training_*.py | 35 | Eğitim/veri araçları |
 | test_v14_features.py | 19 | health/deep, X-Response-Time, WS auth, OpenAPI, JSON log |
 | test_sort_pagination_version.py | 17 | events sort, vehicles pagination, /api/version |
+| test_plate_search_delete_timeline.py | 18 | plate filtresi, bulk delete, demo-token, timeline |
 | test_ws_e2e.py | 4 | WS ingest/detections/broadcast uçtan uca |
 
 ---
