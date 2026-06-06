@@ -136,14 +136,32 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 - **Gerçek-mod pipeline dumanı** (`eval/real_smoke.py`): `AI_MODE=real` çökmeden çalışıyor, K4 fallback geçerli.
 - Test: **73 yeşil** (mock). Tüm adımlar atomik commit + push'landı.
 
-### ⏭️ YARIN devam (öncelik sırası)
-1. **Gerçek COCO alt-küme eğitimi (Faz 3 tam):** COCO'dan birkaç yüz `vehicle`/`person` indir
-   (`fetch_data` coco_json) → `prepare_dataset coco` ile bizim 7-sınıf formatına çevir → `audit` →
-   `train --tier critical --curriculum` ile ilk gerçek `best.pt` v0. Hedef: bizim sınıflarımızla çalışan model.
-2. **`eval/evaluate.py` — QoD %40 kanıtı (plan Bölüm 8):** Normal vs Kritik doğruluk farkı + `bandwidth_efficiency`
-   raporu. Yarışmanın **en ağırlıklı** kriteri; sayısal kanıt üretmeli.
-3. **Faz 4 — Gerçek plaka OCR:** `pip install easyocr` (GPU) → gerçek-mod dumanında plate artık gerçek;
-   eski projedeki "34 TC 8532" birikimini taşı. (Opsiyonel: `huggingface_hub` ile lp_detector, bkz. R7.)
+### ✅ Tamamlanan (6 Haziran — devam oturumu)
+- **Gerçek COCO alt-küme eğitimi (Faz 3 tam) → `best.pt` v0.** COCO **val2017** (5000 imaj) indirildi;
+  yeni `ai/training/build_coco_subset.py` ile hedef-sınıf içeren imajlara süzülüp train/val'a bölündü
+  (**2555 / 639 imaj**, 14269 kutu). `train --tier critical --curriculum` (yolov8s, RTX 4070).
+- **Per-sınıf val (mAP50):**
+
+  | model | ALL | vehicle | person | phone |
+  |---|---|---|---|---|
+  | ısınma (donuk omurga, 5ep) | **0.602** | 0.657 | 0.762 | 0.387 |
+  | ana fine-tune (30ep) | 0.481 | 0.506 | 0.683 | 0.254 |
+
+  ⚠ **Bulgu (K-008):** Agresif fine-tune (mosaic=1.0/mixup/scale=0.5 + tam çözme) küçük 2555-imaj
+  alt-kümesinde COCO-öneğitimli özellikleri **aşındırdı** → ısınma modeli her sınıfta daha iyi.
+  **v0 olarak ısınma `best.pt` seçildi** → `models/yolguvenligi_coco_v0.pt`, `.env`'de `YOLO_MODEL_CRITICAL`.
+- **`train.py` taşınabilirlik düzeltmesi:** `_resolve_data_yaml()` data.yaml'deki göreli `path`'i mutlak
+  yapar (ultralytics `datasets_dir` import-anı önbelleğini atlar; eskiden gerçek eğitim çökerdi).
+- Gerçek-mod doğrulama: pipeline v0 modelini yükleyip çıkarım yapıyor (person tespiti OK).
+
+### ⏭️ Sıradaki (öncelik sırası)
+1. **v1 eğitim reçetesi (bulgu K-008'i çöz):** ya hafif augmentation + düşük lr + daha çok freeze ile
+   ısınmadan ileri git, ya da daha çok veri (BDD100K/daha fazla COCO) + uzun schedule. Hedef: ana aşama > 0.602.
+2. **`eval/evaluate.py` — QoD %40 kanıtı (plan Bölüm 8):** mock kanıt ÇALIŞIYOR (cabin 0→73, bant tasarrufu
+   ~%22). Eksik: gerçek `best.pt` v0 ile çalıştırıp sayıyı tazele + per-sınıf mAP'i rapora bağla.
+3. **Faz 4 — Gerçek plaka OCR:** `pip install easyocr` (GPU) → gerçek-mod dumanında plate gerçek;
+   "34 TC 8532" birikimini taşı. **R7 güncel:** `keremberke/yolov8n-license-plate-detection` HF reposu
+   **kaldırılmış** (RepositoryNotFoundError) → lp_detector CV fallback'te; yeni plaka modeli/repo bul.
 
 ### 🔧 Açık/temizlik
 - `stash@{0}` ("R6: sapmış eski çalışma ağacı") hâlâ duruyor — büyük olasılıkla **atılacak** (`git stash drop`),
