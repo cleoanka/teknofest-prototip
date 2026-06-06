@@ -76,9 +76,10 @@ _OCR_TO_LETTER: dict[str, str] = {
 }
 
 # Minimum boyutlar: bu altında OCR anlamsız
-MIN_PLATE_WIDTH = 80
-MIN_PLATE_HEIGHT = 28
-TARGET_PLATE_HEIGHT = 64   # upscale hedefi (piksel)
+MIN_PLATE_WIDTH = 60
+MIN_PLATE_HEIGHT = 20
+# 64→96: daha yüksek çözünürlük 3/0 ve 8/B gibi OCR karmaşalarını önemli ölçüde azaltır.
+TARGET_PLATE_HEIGHT = 96
 
 
 def normalize_plate(text: str) -> str:
@@ -93,14 +94,9 @@ def _apply_position_rules(text: str) -> str:
     """
     Türk plaka yapısına göre karakter düzeltme.
 
-    Strateji: kör sınır tespiti yerine tüm geçerli split noktalarını (1, 2, 3 harf)
-    dener — regex'e uyan ilk sonucu döndürür. Regex uymasa da best-effort döner.
-
-    Örnek: '34AKB458' → harf grubu 1,2,3 harf ile denenir → '34AKB458' geçerli.
-    Örnek: '34OKB458' → '34' rakam zorunlu → '34OKB458'... ama 'O' il kodunda
-           rakama çevrilmeli → '340KB458'. Harf=1 → '340KB458'? Hayır, K→K,
-           sonra B,4,5,8 rakam. '34' + il kodu fix → '34'. Sonra split denenince
-           harf=3 → '34' + 'OKB' (harfe çevir 'O'→'O' zaten harf) + '458' → '34OKB458' ✓
+    Strateji: tüm geçerli split noktalarını (1,2,3 harf) dener; regex'e uyan
+    ilk sonucu döndürür. 3↔0 karmaşası: il kodunun ilk hanesi için her iki
+    varyant da sınanır — geçerli plaka üreteni tercih eder.
     """
     if len(text) < 5:
         return text
@@ -114,21 +110,54 @@ def _apply_position_rules(text: str) -> str:
     # İl kodu: pozisyon 0-1 her zaman rakam
     il = "".join(fix_digit(c) for c in text[:2])
 
-    # Harf grubu uzunluğunu 1,2,3 olarak dene; regex'e uyan ilk sonucu al
+    # 3↔0 karmaşası için alternatif il kodu (OCR sık karıştırır).
+    # Her iki varyantı da geçerliyse sınayla — formatla eşleşen kazanır.
+    il_alt = ({"0": "3", "3": "0"}.get(il[0], il[0]) + il[1]) if il else il
+    il_variants = [il] if il == il_alt else [il, il_alt]
+
     best_candidate = None
-    for n_letters in (1, 2, 3):
-        letter_end = 2 + n_letters
-        if letter_end >= len(text):
-            continue
-        harf = "".join(fix_letter(c) for c in text[2:letter_end])
-        sayi = "".join(fix_digit(c) for c in text[letter_end:])
-        candidate = il + harf + sayi
-        if is_valid_tr_plate(candidate):
-            return candidate
-        if best_candidate is None:
-            best_candidate = candidate
+    for il_try in il_variants:
+        for n_letters in (1, 2, 3):
+            letter_end = 2 + n_letters
+            if letter_end >= len(text):
+                continue
+            harf = "".join(fix_letter(c) for c in text[2:letter_end])
+            sayi = "".join(fix_digit(c) for c in text[letter_end:])
+            candidate = il_try + harf + sayi
+            if is_valid_tr_plate(candidate):
+                return candidate
+            if best_candidate is None:
+                best_candidate = candidate
 
     return best_candidate or text
+
+
+def _char_vote(candidates: List[Tuple[str, float]]) -> Tuple[Optional[str], float]:
+    """En iyi adayın uzunluğunu çapa alarak ağırlıklı karakter oylaması.
+
+    Neden çapa: farklı uzunluktaki okumaları (8 vs 9 karakter) birleştirmek
+    anlamsız karakter zinciri üretir. En yüksek skorlu okumanın uzunluğu referans
+    alınır; sadece aynı uzunluktaki diğer adaylar oylamaya katılır.
+    """
+    if not candidates:
+        return None, 0.0
+    best_text, best_score = max(candidates, key=lambda x: x[1])
+    target_len = len(best_text)
+    same_len = [(t, s) for t, s in candidates if len(t) == target_len]
+
+    if len(same_len) < 2:
+        return best_text, best_score   # oylama yapacak yeterli aday yok
+
+    chars = []
+    for i in range(target_len):
+        weights: dict = {}
+        for t, s in same_len:
+            ch = t[i]
+            weights[ch] = weights.get(ch, 0.0) + s
+        chars.append(max(weights, key=weights.get))
+    voted = "".join(chars)
+    avg_score = sum(s for _, s in same_len) / len(same_len)
+    return voted, min(avg_score, 1.0)
 
 
 def _upscale(img: np.ndarray) -> np.ndarray:
@@ -232,15 +261,17 @@ class PlateReader:
             return "mock"
 
     def _read_variants(self, crop: np.ndarray) -> Tuple[Optional[str], float]:
-        """
-        Tüm preprocessing varyantları üzerinde EasyOCR çalıştır.
-        Keskinlik ve format geçerliliği ağırlıklı en iyi okumayı döndür.
+        """Tüm preprocessing varyantları üzerinde EasyOCR çalıştır.
+
+        4 varyant üzerinden TÜÜM geçerli adayları toplar, ardından karakter oylaması
+        (_char_vote) ile tek sonuca indirir. Bu sayede tek bir varyantın 3↔0 gibi
+        anlık karakter hatası genel sonucu bozmaz.
         """
         if self.mode == "mock" or self._reader is None:
             return None, 0.0
 
-        best_text: Optional[str] = None
-        best_score = -1.0
+        all_valid: List[Tuple[str, float]] = []   # geçerli TR formatı adaylar
+        all_cands: List[Tuple[str, float]] = []   # format uymasa da best-effort
 
         for variant in _preprocess_variants(crop):
             sharpness_w = min(1.0, _laplacian_sharpness(variant) / 800.0)
@@ -256,16 +287,28 @@ class PlateReader:
 
             for _, text, conf in results:
                 norm = normalize_plate(text)
-                if len(norm) < 5:   # en kısa geçerli plaka 5 karakter
+                if len(norm) < 5:
                     continue
                 corrected = _apply_position_rules(norm)
                 format_bonus = 0.12 if is_valid_tr_plate(corrected) else 0.0
                 score = conf * (0.55 + 0.45 * sharpness_w) + format_bonus
-                if score > best_score:
-                    best_text = corrected
-                    best_score = score
+                all_cands.append((corrected, score))
+                if is_valid_tr_plate(corrected):
+                    all_valid.append((corrected, score))
 
-        return (best_text, min(best_score, 1.0)) if best_score > 0 else (None, 0.0)
+        # Geçerli adaylar varsa karakter oylamasıyla birleştir.
+        if all_valid:
+            voted, score = _char_vote(all_valid)
+            if voted and is_valid_tr_plate(voted):
+                return voted, score
+            # Oylamanın ürettiği metin geçersizse (oylama sınır bölgede bozabilir)
+            # en yüksek skorlu geçerli adayı döndür
+            return max(all_valid, key=lambda x: x[1])
+
+        if all_cands:
+            return max(all_cands, key=lambda x: x[1])
+
+        return None, 0.0
 
     def read(self, crop: Optional[np.ndarray]) -> PlateResult:
         if crop is None or crop.size == 0:

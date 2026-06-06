@@ -186,6 +186,144 @@ def refine_to_frame(
     return _pad(sub, pad_h, pad_v)
 
 
+def _order_corners(pts: np.ndarray) -> np.ndarray:
+    """4 noktayı TL→TR→BR→BL sırasına koy (perspektif dönüşümü için)."""
+    rect = np.zeros((4, 2), dtype=np.float32)
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]          # TL: x+y en küçük
+    rect[2] = pts[np.argmax(s)]          # BR: x+y en büyük
+    diff = np.diff(pts, axis=1).flatten()
+    rect[1] = pts[np.argmin(diff)]       # TR: y-x en küçük
+    rect[3] = pts[np.argmax(diff)]       # BL: y-x en büyük
+    return rect
+
+
+def perspective_correct(
+    crop: Optional[np.ndarray],
+    *,
+    target_aspect: float = 4.64,    # TR standart plaka: 520 mm / 112 mm ≈ 4.64
+    min_area_ratio: float = 0.08,   # Kontur crop alanının en az %8'i olmalı
+    pad_h: float = 0.05,
+    pad_v: float = 0.08,
+) -> "tuple[Optional[np.ndarray], Optional[np.ndarray]]":
+    """Yamuk/eğik plakayı perspektif dönüşümüyle dikdörtgene çevir.
+
+    Neden: `refine_to_frame` sadece rotasyon yapıyor (deskew); plaka kameraya
+    açılı çekildiğinde trapezoid görünür. Burada 4 köşe tespit edilip
+    `getPerspectiveTransform` ile gerçek dikdörtgene düzleştirilir — OCR
+    karakter çözünürlüğü ve doğruluğu önemli ölçüde artar.
+
+    Dönüş: (düzeltilmiş_görüntü, köşeler_4x2_crop_coords).
+    4 köşe bulunamazsa (None, None) döner → çağıran eski fallback'e geçer.
+    Köşe sırası: TL → TR → BR → BL.
+    """
+    if crop is None or crop.size == 0:
+        return None, None
+    try:
+        import cv2
+    except ImportError:
+        return None, None
+
+    h, w = crop.shape[:2]
+    if w < 24 or h < 8:
+        return None, None
+
+    gray = _to_gray(crop)
+    # Bilateral filter + Canny: kenar korunurken gürültü azalır.
+    blur = cv2.bilateralFilter(gray, 9, 75, 75)
+    edges = cv2.Canny(blur, 25, 100)
+    # Yatay kapama: plaka gövdesini birleştirir.
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(11, w // 14), 3))
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+    cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None, None
+
+    # Yeterli alana sahip konturları filtrele.
+    crop_area = w * h
+    valid_cnts = [c for c in cnts if cv2.contourArea(c) >= crop_area * min_area_ratio]
+    if not valid_cnts:
+        return None, None
+    largest = max(valid_cnts, key=cv2.contourArea)
+
+    # approxPolyDP ile 4 köşeye yaklaştır (eps kademeli artar).
+    peri = cv2.arcLength(largest, True)
+    corners_4 = None
+    for eps in (0.02, 0.03, 0.04, 0.05, 0.06, 0.08):
+        approx = cv2.approxPolyDP(largest, eps * peri, True)
+        if len(approx) == 4:
+            corners_4 = approx.reshape(4, 2).astype(np.float32)
+            break
+
+    if corners_4 is None:
+        # 4 köşe bulunamadı → minAreaRect köşelerini kullan.
+        rect = cv2.minAreaRect(largest)
+        (rw, rh) = (max(rect[1]), min(rect[1]))
+        if rh < 1 or rw / max(rh, 1) < 1.5:
+            return None, None
+        corners_4 = cv2.boxPoints(rect).astype(np.float32)
+
+    ordered = _order_corners(corners_4)
+
+    # Hedef dikdörtgen boyutunu hesapla (kaynak kenar uzunluklarından).
+    w_top = float(np.linalg.norm(ordered[1] - ordered[0]))
+    w_bot = float(np.linalg.norm(ordered[2] - ordered[3]))
+    h_left = float(np.linalg.norm(ordered[3] - ordered[0]))
+    h_right = float(np.linalg.norm(ordered[2] - ordered[1]))
+    out_w = max(80, int(max(w_top, w_bot)))
+    out_h = max(20, int(max(h_left, h_right)))
+
+    # Aspekt oranı mantıklı mı? Plaka 1.5:1 ile 9:1 arasında olmalı.
+    aspect = out_w / max(out_h, 1)
+    if not (1.5 <= aspect <= 9.0):
+        return None, None
+
+    dst = np.array(
+        [[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]],
+        dtype=np.float32,
+    )
+    M = cv2.getPerspectiveTransform(ordered, dst)
+    warped = cv2.warpPerspective(
+        crop, M, (out_w, out_h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+    return _pad(warped, pad_h, pad_v), ordered
+
+
+def refine_with_corners(
+    crop: Optional[np.ndarray],
+    *,
+    pad_h: float = 0.05,
+    pad_v: float = 0.08,
+    deskew: bool = True,
+) -> "tuple[Optional[np.ndarray], Optional[np.ndarray]]":
+    """Plakanın perspektif düzeltmesini yap ve 4 köşeyi döndür.
+
+    Önce tam perspektif dönüşümü dener. Sonuç orijinal crop'tan %30'dan fazla
+    daha az netliyse warp reddedilir — yanlış kontur yakalandı demektir (OCR'ı
+    bozar). Bu durumda köşeler de güvenilmez sayılıp None döner.
+
+    Dönüş: (düzeltilmiş_görüntü, köşeler_4x2) veya (görüntü, None).
+    Köşeler crop koordinatlarındadır; pipeline'da full-frame'e çevrilir.
+    """
+    if crop is None or crop.size == 0:
+        return None, None
+
+    orig_sharp = plate_sharpness(crop)
+    corrected, corners = perspective_correct(crop, pad_h=pad_h, pad_v=pad_v)
+    if corrected is not None:
+        corr_sharp = plate_sharpness(corrected)
+        # Netlik %70'in altına düştüyse warp yanlış kontur yakalamış —
+        # OCR için daha kötü, köşeler de güvenilmez, fallback'e geç.
+        if corr_sharp >= orig_sharp * 0.70:
+            return corrected, corners
+
+    # Fallback: rotasyon tabanlı deskew (köşe bilgisi üretilemedi)
+    fallback = refine_to_frame(crop, pad_h=pad_h, pad_v=pad_v, deskew=deskew)
+    return fallback, None
+
+
 def _pad(crop: np.ndarray, pad_h: float, pad_v: float) -> np.ndarray:
     """Yatay/dikey oransal padding ekler (sınırları taşma olmadan)."""
     h, w = crop.shape[:2]

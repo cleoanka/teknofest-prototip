@@ -25,7 +25,7 @@ from ai.detector import build_detector, BaseDetector
 from ai.tracking import IOUTracker
 from ai.plate_ocr import PlateReader
 from ai.lp_detector import get_lp_detector
-from ai.plate_crop import looks_like_plate, refine_to_frame, plate_sharpness
+from ai.plate_crop import looks_like_plate, refine_to_frame, plate_sharpness, refine_with_corners
 from ai.plate_tracker import PlateTracker
 from ai.driver_state import DriverMonitor
 from ai.speed import estimate_speed
@@ -92,42 +92,94 @@ class Pipeline:
 
     def _find_plate(
         self, frame: np.ndarray, vehicle_bbox: Optional[BBox], w: int, h: int
-    ) -> Tuple[Optional[BBox], Optional[np.ndarray], float]:
+    ) -> "Tuple[Optional[BBox], Optional[np.ndarray], float, Optional[Tuple[int,int]]]":
         """LP dedektörle plaka adayını bul.
 
-        Araç bbox varsa SADECE araç crop'unda arar → araç dışı false positive
-        (trafik levhası, duvar) tamamen elenir. Araç bbox yoksa (TOGG: COCO araç
-        kutusu veremez) full frame'de arar.
+        Ölçek-adaptif arama: Araç çok büyük göründüğünde (yakın mesafe, alan > frame'in
+        %20'si) araç crop'u %60'a küçültülerek LP modele verilir; model küçük-orta
+        ölçekte eğitildiğinden bunu daha iyi görür. Koordinatlar geri ölçeklenir.
 
-        Dönüş: (full_frame_bbox | None, plate_crop | None, lp_model_conf).
-        lp_model_conf: LP model güven değeri (0.0 = bulunamadı; CV fallback=0.50).
-        Crop, araç crop'undan alınır (piksel kalitesi daha iyi); bbox full-frame'e çevrilir.
+        Alt-şerit fallback: LP modeli hiçbir şey bulamazsa araç crop'un alt %45'inde
+        ayrıca arama yapılır (plaka genellikle aracın alt kısmında olur).
+
+        Dönüş: (full_frame_bbox, plate_crop, lp_conf, plate_origin).
+        plate_origin = (full_frame_x1, full_frame_y1) plaka crop'un full-frame başlangıcı
+        → perspektif köşelerini full-frame'e çevirmek için kullanılır.
         """
         if vehicle_bbox is not None:
             veh_crop, (ox, oy) = _vehicle_crop(frame, vehicle_bbox)
             if veh_crop is None or veh_crop.size == 0:
-                return None, None, 0.0
-            detections = self.lp_detector.detect_with_conf(veh_crop)
+                return None, None, 0.0, None
+
+            veh_h, veh_w = veh_crop.shape[:2]
+            frame_area = max(1, w * h)
+            veh_area = veh_w * veh_h
+
+            # Ölçek-adaptif LP search: yakın araç → downscale
+            lp_scale = 1.0
+            if veh_area / frame_area > 0.20:
+                lp_scale = 0.60
+                try:
+                    import cv2 as _cv2
+                    sw = max(32, int(veh_w * lp_scale))
+                    sh = max(16, int(veh_h * lp_scale))
+                    search_crop = _cv2.resize(veh_crop, (sw, sh), interpolation=_cv2.INTER_AREA)
+                except Exception:
+                    search_crop = veh_crop
+                    lp_scale = 1.0
+            else:
+                search_crop = veh_crop
+
+            detections = self.lp_detector.detect_with_conf(search_crop)
+
+            # Alt-şerit fallback: LP model bulamazsa araç alt kısmını ayrıca tara
             if not detections:
-                return None, None, 0.0
-            best_bbox, best_conf = max(detections, key=lambda t: t[0].area)
-            bbox = BBox(x1=best_bbox.x1 + ox, y1=best_bbox.y1 + oy,
-                        x2=best_bbox.x2 + ox, y2=best_bbox.y2 + oy)
-            lx1, ly1 = max(0, int(best_bbox.x1)), max(0, int(best_bbox.y1))
-            lx2 = min(veh_crop.shape[1], int(best_bbox.x2))
-            ly2 = min(veh_crop.shape[0], int(best_bbox.y2))
+                strip_y = int(veh_h * 0.55)
+                bottom = veh_crop[strip_y:, :]
+                if bottom.size > 0:
+                    strip_dets = self.lp_detector.detect_with_conf(bottom)
+                    if strip_dets:
+                        # y koordinatlarını strip offset ile düzelt
+                        detections = [
+                            (BBox(x1=b.x1, y1=b.y1 + strip_y,
+                                  x2=b.x2, y2=b.y2 + strip_y), c)
+                            for b, c in strip_dets
+                        ]
+
+            if not detections:
+                return None, None, 0.0, None
+
+            best_local, best_conf = max(detections, key=lambda t: t[0].area)
+
+            # Downscale yapıldıysa koordinatları geri ölçekle
+            if lp_scale != 1.0:
+                inv = 1.0 / lp_scale
+                best_local = BBox(
+                    x1=best_local.x1 * inv, y1=best_local.y1 * inv,
+                    x2=best_local.x2 * inv, y2=best_local.y2 * inv,
+                )
+
+            full_bbox = BBox(
+                x1=best_local.x1 + ox, y1=best_local.y1 + oy,
+                x2=best_local.x2 + ox, y2=best_local.y2 + oy,
+            )
+            lx1, ly1 = max(0, int(best_local.x1)), max(0, int(best_local.y1))
+            lx2 = min(veh_crop.shape[1], int(best_local.x2))
+            ly2 = min(veh_crop.shape[0], int(best_local.y2))
             crop = veh_crop[ly1:ly2, lx1:lx2]
-            return bbox, (crop if crop.size > 0 else None), best_conf
+            plate_origin = (lx1 + ox, ly1 + oy)
+            return full_bbox, (crop if crop.size > 0 else None), best_conf, plate_origin
 
         # TOGG / araç bbox yok → full frame
         detections = self.lp_detector.detect_with_conf(frame)
         if not detections:
-            return None, None, 0.0
+            return None, None, 0.0, None
         best_bbox, best_conf = max(detections, key=lambda t: t[0].area)
         fx1, fy1 = max(0, int(best_bbox.x1)), max(0, int(best_bbox.y1))
         fx2, fy2 = min(w, int(best_bbox.x2)), min(h, int(best_bbox.y2))
         crop = frame[fy1:fy2, fx1:fx2]
-        return best_bbox, (crop if crop.size > 0 else None), best_conf
+        plate_origin = (fx1, fy1)
+        return best_bbox, (crop if crop.size > 0 else None), best_conf, plate_origin
 
     def process(self, frame: np.ndarray, critical: bool,
                 fps: float = 30.0,
@@ -201,29 +253,26 @@ class Pipeline:
             vehicle.driver_bbox = DriverMonitor.driver_roi(vehicle.bbox, (h, w))
             vehicle.passenger_bbox = DriverMonitor.passenger_roi(vehicle.bbox, (h, w))
 
-        # Blok D — Plaka tespiti + crop + araç-id'sine bağlı kararlılık (kritik profilde)
+        # Blok D — Plaka tespiti + perspektif düzeltme + araç-id'sine bağlı kararlılık
         #
-        # TÜM araçlar işlenir (sadece en büyük değil): her track_id için plaka_tracker
-        # güncellenir. Birincil araç (en büyük bbox) sonuçları result.vehicle'a yazılır;
-        # diğer araçların verileri plate_tracker içinde birikir (ilerleyen frame'lerde
-        # birincil araç değişirse anlık geçmişe sahip olunur).
+        # TÜM araçlar işlenir (sadece en büyük değil). Her track_id için plate_tracker
+        # güncellenir. Birincil araç sonuçları result.vehicle'a yazılır.
         if critical and frame is not None and frame.size:
-            bypass_conf = getattr(self.s, "plate_lp_conf_bypass", 0.40)
+            bypass_conf = getattr(self.s, "plate_lp_conf_bypass", 0.30)
 
-            # Tüm araçlar için plaka işle (plate_tracker her track_id'yi saklar)
             for vd in veh_dets:
                 tid = vd.track_id
                 if tid is None:
                     continue
-                cand_bbox, plate_crop, lp_conf = self._find_plate(frame, vd.bbox, w, h)
+                cand_bbox, plate_crop, lp_conf, plate_origin = \
+                    self._find_plate(frame, vd.bbox, w, h)
 
                 cur_plate = PlateResult()
                 cur_bbox: Optional[BBox] = None
                 cur_sharp = 0.0
+                cur_corners = None
 
                 if plate_crop is not None:
-                    # LP model yüksek güvende tespit ettiyse looks_like_plate gate'ini atla.
-                    # Küçük/uzak plakalar düşük std/edge gösterir; model zaten doğruladı.
                     gate_ok = (lp_conf >= bypass_conf) or looks_like_plate(
                         plate_crop,
                         min_std=self.s.plate_min_likeness_std,
@@ -231,27 +280,47 @@ class Pipeline:
                     )
                     if gate_ok:
                         ocr_crop = plate_crop
+                        local_corners = None
                         if self.s.plate_refine_crop:
-                            refined = refine_to_frame(plate_crop, deskew=self.s.plate_deskew)
+                            # Perspektif düzeltme — yamuk plakayı dikdörtgene çevir
+                            refined, local_corners = refine_with_corners(
+                                plate_crop,
+                                deskew=self.s.plate_deskew,
+                            )
                             if refined is not None and refined.size > 0:
                                 ocr_crop = refined
+
+                        # Köşeleri full-frame koordinatına çevir
+                        if local_corners is not None and plate_origin is not None:
+                            px0, py0 = plate_origin
+                            cur_corners = [
+                                [float(pt[0]) + px0, float(pt[1]) + py0]
+                                for pt in local_corners.tolist()
+                            ]
+
                         cur_sharp = plate_sharpness(ocr_crop)
                         cur_plate = self.plate_reader.read(ocr_crop)
                         cur_bbox = cand_bbox
 
-                self.plate_tracker.update(tid, cur_plate, cur_bbox, cur_sharp, self._frame_id)
+                self.plate_tracker.update(
+                    tid, cur_plate, cur_bbox, cur_sharp, self._frame_id,
+                    corners=cur_corners,
+                )
 
-            # Birincil araç (en büyük bbox) için kararlı sonucu al
+            # Birincil araç (en büyük bbox) kararlı sonuç
             if vehicle.track_id is not None:
-                stable_plate, stable_bbox, stable_pw = \
-                    self.plate_tracker.resolve(vehicle.track_id)
+                stable_plate, stable_bbox, stable_pw, stable_corners = \
+                    self.plate_tracker.resolve(vehicle.track_id, frame_id=self._frame_id)
                 vehicle.plate = stable_plate if stable_plate.text else PlateResult()
                 if stable_bbox is not None:
                     vehicle.plate_bbox = stable_bbox
                     vehicle.plate_pixel_width = stable_pw
+                if stable_corners is not None:
+                    vehicle.plate_corners = stable_corners
             else:
                 # track_id yok (TOGG full-frame modu) → tek seferlik tespit
-                cand_bbox, plate_crop, lp_conf = self._find_plate(frame, None, w, h)
+                cand_bbox, plate_crop, lp_conf, plate_origin = \
+                    self._find_plate(frame, None, w, h)
                 if plate_crop is not None:
                     gate_ok = (lp_conf >= bypass_conf) or looks_like_plate(
                         plate_crop,
@@ -260,14 +329,23 @@ class Pipeline:
                     )
                     if gate_ok:
                         ocr_crop = plate_crop
+                        local_corners = None
                         if self.s.plate_refine_crop:
-                            refined = refine_to_frame(plate_crop, deskew=self.s.plate_deskew)
+                            refined, local_corners = refine_with_corners(
+                                plate_crop, deskew=self.s.plate_deskew,
+                            )
                             if refined is not None and refined.size > 0:
                                 ocr_crop = refined
                         vehicle.plate = self.plate_reader.read(ocr_crop)
                         vehicle.plate_bbox = cand_bbox
                         if cand_bbox is not None:
                             vehicle.plate_pixel_width = round(cand_bbox.width, 1)
+                        if local_corners is not None and plate_origin is not None:
+                            px0, py0 = plate_origin
+                            vehicle.plate_corners = [
+                                [float(pt[0]) + px0, float(pt[1]) + py0]
+                                for pt in local_corners.tolist()
+                            ]
 
             # TOGG: araç yoksa ama plaka bulunduysa present=True
             if not vehicle.present and vehicle.plate_bbox is not None:
