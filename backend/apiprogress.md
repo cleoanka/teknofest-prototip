@@ -8,21 +8,27 @@
 
 | Özellik | Durum | Notlar |
 |---|---|---|
-| JWT RS256 Authentication | ✅ Tamamlandı | `backend/auth.py`, RS256 anahtar çifti startup'ta üretiliyor |
-| Rate Limiting 100/min | ✅ Tamamlandı | slowapi, tüm `/api/*` ve `/camara/*` endpoint'leri |
-| CAMARA env vars | ✅ Tamamlandı | `CAMARA_BASE_URL/CLIENT_ID/SECRET/MODE` settings.py'de |
-| /api/statistics | ✅ Tamamlandı | Son 1 saat, risk breakdown, bandwidth_efficiency |
-| /api/vehicles/{plate} | ✅ Tamamlandı | Plaka bazlı olay geçmişi, 404 if not found |
-| /api/events/{id} | ✅ Tamamlandı | Tek olay ID ile sorgulama |
-| /api/events/export | ✅ Tamamlandı | CSV download, filtre parametreleri uygulanıyor |
-| Event filtering (from_ts/to_ts/level/vtype) | ✅ Tamamlandı | db.py SQL güncellendi, parametreli |
-| /camara/qod/sessions (GET) | ✅ Tamamlandı | Aktif oturum listesi |
-| WS frame size limit (5 MB) | ✅ Tamamlandı | `/ws/ingest` boyut kontrolü |
-| Latency tracking (total_latency_ms) | ✅ Tamamlandı | client_ts, server_recv_ts, FrameResult alanı |
-| Prometheus /metrics | ✅ Tamamlandı | HTTP metrikler + custom counter/gauge/histogram |
-| /api/health zenginleştirme | ✅ Tamamlandı | uptime_s, event_count, ws_connections |
-| WS bağlantı yönetimi | ✅ Tamamlandı | disconnect cleanup, WS sayacı |
-| Test kapsamı (yeni testler) | ✅ Tamamlandı | test_auth, test_statistics, test_filtering, test_new_endpoints |
+| JWT RS256 Authentication | ✅ | `backend/auth.py`, RS256 anahtar çifti startup'ta üretiliyor |
+| JWT key kalıcılığı (PEM dosyası) | ✅ | JWT_PRIVATE_KEY_PATH, restart sonrası token geçerliliği |
+| Rate Limiting 100/min | ✅ | slowapi, tüm `/api/*` ve `/camara/*` endpoint'leri |
+| CAMARA env vars | ✅ | `CAMARA_BASE_URL/CLIENT_ID/SECRET/MODE` settings.py'de |
+| /api/statistics | ✅ | Son N saat, risk breakdown, bandwidth_efficiency |
+| /api/events/summary | ✅ | Saatlik dağılım, grafik için (1–168 saat) |
+| /api/vehicles/{plate} | ✅ | Plaka bazlı olay geçmişi, TR plaka format validasyon |
+| /api/events/{id} | ✅ | Tek olay ID ile sorgulama |
+| /api/events/export | ✅ | CSV download, filtre parametreleri uygulanıyor |
+| /api/events X-Total-Count header | ✅ | REST standart response header |
+| Event filtering (from_ts/to_ts/level/vtype) | ✅ | db.py SQL güncellendi, parametreli |
+| /api/settings (GET) | ✅ | Salt-okunur ayar görüntüleme, hassas bilgiler hariç |
+| /api/settings (PATCH) | ✅ | Runtime QoD eşik güncelleme, demo için |
+| /.well-known/jwks.json | ✅ | RS256 public key PEM endpoint |
+| /camara/qod/sessions (GET) | ✅ | Aktif oturum listesi |
+| WS /ws/ingest frame size limit (5 MB) | ✅ | Boyut kontrolü |
+| WS /ws/detections | ✅ | disconnect cleanup, WS sayacı |
+| WS /ws/status | ✅ | 1 sn aralıkla sistem durumu akışı |
+| Latency tracking (total_latency_ms) | ✅ | client_ts, server_recv_ts, FrameResult alanı |
+| Prometheus /metrics | ✅ | HTTP metrikler + custom counter/gauge/histogram |
+| /api/health zenginleştirme | ✅ | uptime_s, event_count, ws_connections |
 
 ---
 
@@ -81,10 +87,30 @@ Filtre parametrelerini destekliyor (from_ts, to_ts, level, vtype).
 
 ```
 Son çalıştırma: 2026-06-06
-Durum: TÜM TESTLER YEŞİL
-Toplam test: 85+
+Durum: TÜM TESTLER YEŞİL ✅
+Toplam test: 144 (73 eski → 144 yeni)
 Ortam: AI_MODE=mock, DB=:memory:
 ```
+
+| Test Dosyası | Test Sayısı | Kapsam |
+|---|---|---|
+| test_auth.py | 8 | JWT RS256 üretim, doğrulama, expire, tamper |
+| test_camara_numverif.py | 4 | SIM doğrulama, JWT entegrasyonu |
+| test_camara_qod.py | 4 | QoD oturum create/delete/status |
+| test_events_api.py | 4 | EventStore CRUD, API |
+| test_filtering.py | 12 | from_ts/to_ts/level/vtype filtreleme |
+| test_health.py | 2 | /api/health, /api/qod/status |
+| test_latency.py | 5 | total_latency_ms, client_ts, WS frame limiti |
+| test_new_endpoints.py | 18 | vehicles/{plate}, events/{id}, export, QoD list |
+| test_patch_settings.py | 10 | Runtime settings, events/summary |
+| test_pipeline_schema.py | 4 | FrameResult şema doğrulama |
+| test_qod_trigger.py | 8 | A-E koşul motoru |
+| test_risk.py | 4 | Risk skoru hesaplama |
+| test_settings_and_auth.py | 12 | /api/settings, JWKS, plate validasyon, WS status |
+| test_speed.py | 4 | Hız tahmini |
+| test_statistics.py | 6 | /api/statistics doğruluğu |
+| test_training_*.py | 35 | Eğitim/veri araçları |
+| test_ws_e2e.py | 4 | WS ingest/detections/broadcast uçtan uca |
 
 ---
 
