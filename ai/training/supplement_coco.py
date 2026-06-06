@@ -22,7 +22,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
+import time
 import urllib.request
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -59,8 +61,14 @@ def select_image_ids(coco: dict, focus: List[str], cap_per_class: int = 0) -> Se
     return selected
 
 
-def download_images(images_meta: List[dict], out_dir: str, workers: int = 32) -> int:
-    """İmajları COCO sunucusundan eşzamanlı indirir (zaten varsa atlar). Başarılı sayısını döner."""
+def download_images(images_meta: List[dict], out_dir: str, workers: int = 16,
+                    timeout: float = 20.0, retries: int = 3) -> int:
+    """İmajları COCO sunucusundan eşzamanlı indirir (zaten varsa atlar). Başarılı sayısını döner.
+
+    Sağlamlık: per-istek timeout (takılan worker'ı keser), N denemeli retry (artan bekleme),
+    tarayıcı User-Agent'i (bazı sunucular varsayılan urllib UA'yı reddeder). Düşük worker
+    sayısı sunucu hız-kısıtlamasını (throttle) azaltır.
+    """
     os.makedirs(out_dir, exist_ok=True)
 
     def fetch(im: dict) -> bool:
@@ -69,11 +77,21 @@ def download_images(images_meta: List[dict], out_dir: str, workers: int = 32) ->
         if os.path.isfile(dst) and os.path.getsize(dst) > 0:
             return True
         url = im.get("coco_url") or COCO_IMG_URL.format(fn)
-        try:
-            urllib.request.urlretrieve(url, dst)
-            return True
-        except Exception:
-            return False
+        for attempt in range(retries):
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=timeout) as r, open(dst, "wb") as out:
+                    shutil.copyfileobj(r, out)
+                if os.path.getsize(dst) > 0:
+                    return True
+            except Exception:
+                if os.path.exists(dst):
+                    try:
+                        os.remove(dst)
+                    except OSError:
+                        pass
+                time.sleep(0.5 * (attempt + 1))   # artan bekleme (throttle'a nazik)
+        return False
 
     ok = done = 0
     total = len(images_meta)
@@ -89,7 +107,8 @@ def download_images(images_meta: List[dict], out_dir: str, workers: int = 32) ->
 
 
 def supplement(json_path: str, out_root: str, focus: List[str],
-               cap_per_class: int = 0, workers: int = 32) -> dict:
+               cap_per_class: int = 0, workers: int = 16,
+               timeout: float = 20.0, retries: int = 3) -> dict:
     print(f"train2017 json yükleniyor: {json_path}", flush=True)
     with open(json_path, "r", encoding="utf-8") as f:
         coco = json.load(f)
@@ -101,7 +120,7 @@ def supplement(json_path: str, out_root: str, focus: List[str],
     img_dir = os.path.join(out_root, "images", "train")
     lbl_dir = os.path.join(out_root, "labels", "train")
     print(f"İndiriliyor → {img_dir} ...", flush=True)
-    ok = download_images(images_meta, img_dir, workers)
+    ok = download_images(images_meta, img_dir, workers, timeout, retries)
     print(f"İndirme bitti: {ok}/{len(images_meta)} başarılı", flush=True)
 
     # Yalnız başarıyla inen imajlar için etiket yaz (diskte var olanlar).
@@ -134,9 +153,12 @@ def main():
     ap.add_argument("--focus", nargs="+", default=["truck", "cell phone"],
                     help="hedef COCO sınıf adları (içeren imajlar indirilir)")
     ap.add_argument("--cap-per-class", type=int, default=0, help="sınıf başına imaj sınırı (0=sınırsız)")
-    ap.add_argument("--workers", type=int, default=32, help="eşzamanlı indirme sayısı")
+    ap.add_argument("--workers", type=int, default=16, help="eşzamanlı indirme sayısı (düşük=throttle az)")
+    ap.add_argument("--timeout", type=float, default=20.0, help="per-istek timeout (s)")
+    ap.add_argument("--retries", type=int, default=3, help="başarısız indirme deneme sayısı")
     args = ap.parse_args()
-    supplement(args.json, args.out, args.focus, args.cap_per_class, args.workers)
+    supplement(args.json, args.out, args.focus, args.cap_per_class,
+               args.workers, args.timeout, args.retries)
 
 
 if __name__ == "__main__":
