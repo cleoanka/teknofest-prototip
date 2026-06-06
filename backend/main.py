@@ -1039,7 +1039,10 @@ async def list_test_videos(request: Request):
 
 async def _process_frame(frame: np.ndarray, client_ts: Optional[float]) -> dict:
     server_recv_ts = time.time()
-    result, ctx = state.pipeline.process(frame, critical=state.qod.is_critical)
+    # Aşama 0 — hız Δt'si için istemci yakalama zamanını (video-zaman çizgisi) geçir;
+    # yoksa pipeline wall-clock'a düşer.
+    result, ctx = state.pipeline.process(
+        frame, critical=state.qod.is_critical, frame_ts=client_ts)
     qod_status = state.qod.step(ctx, dt_s=state.settings.qod_eval_period_ms / 1000.0)
 
     if qod_status.mode == "CRITICAL" and result.mode == "NORMAL":
