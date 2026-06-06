@@ -117,7 +117,9 @@ Başka hiçbir bağ yok — bu yüzden YZ kolu bağımsız geliştirilebilir/tes
 | `ai/tracking.py` | IOU takip → `track_id`, bbox alan geçmişi (hız + QoD koşul A) |
 | `ai/speed.py` | Kalibrasyonsuz bbox-alan tabanlı hız tahmini |
 | `ai/plate_ocr.py` | Çok-varyantlı plaka OCR + keskinlik/konsensüs (yalnız kritik) |
-| `ai/driver_state.py` | EAR/PERCLOS yorgunluk + telefon/sigara (ROI çakışma) |
+| `ai/driver_state.py` | EAR/PERCLOS yorgunluk + telefon/sigara (ROI çakışma) + MediaPipe el füzyonu + sürücü kimliği |
+| `ai/mp_cabin.py` | MediaPipe Hands kabin analizi (el→kulak/ağız → telefon/sigara füzyon sinyali) |
+| `ai/mp_seatbelt.py` | MediaPipe Pose + çapraz şerit heuristiği (emniyet kemeri tespiti → `no_seatbelt`) |
 | `ai/risk.py` | Ağırlıklı 0-100 risk skoru |
 | `ai/qod_trigger.py` | **QoD tetik motoru (A–E, 2 ardışık)** — %40 kriter beyni |
 | `ai/pipeline.py` | 6 bloğu birleştiren orkestratör |

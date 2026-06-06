@@ -118,6 +118,33 @@ class Settings(BaseSettings):
     # WebSocket
     ws_max_frame_bytes: int = Field(default=5 * 1024 * 1024)  # 5 MB
 
+    # ── MediaPipe Kabin Analizi (el-yüz yakınlık tabanlı davranış tespiti) ──
+    # NEDEN: sigara/kulaklık COCO'da yok, telefon küçük/elle kapalı → YOLO kaçırır.
+    # MediaPipe Hands el iskeleti ile davranışı nesneyi görmeden yakalar (sensör füzyonu).
+    mp_hands_enabled: bool = Field(default=True)              # FPS düşükse False ile kapat
+    mp_hand_detect_conf: float = Field(default=0.4)           # el tespiti min güven
+    mp_hand_near_ear_ratio: float = Field(default=0.9)        # el-kulak eşiği (yüz genişliğine oran) → telefon/kulaklık
+    mp_hand_near_mouth_ratio: float = Field(default=0.7)      # el-ağız eşiği (yüz genişliğine oran) → sigara
+    mp_cabin_persist_frames: int = Field(default=3)           # kaç ardışık karede onaylanırsa pozitif (gürültü süzme)
+    # Kabin crop ön-iyileştirme (loş otopark + küçük/uzak yüz için — gerçek test verisinde kanıtlandı)
+    mp_enhance_enabled: bool = Field(default=True)            # crop'u MediaPipe'a vermeden önce iyileştir
+    mp_enhance_dark_below: float = Field(default=90.0)        # crop ort. parlaklığı bu altındaysa gamma+CLAHE aydınlat
+    mp_min_crop_px: int = Field(default=320)                  # crop genişliği bu altındaysa büyüt (MediaPipe iç küçültmede yüzü kaybetmesin)
+    # Sürücü kimliği (geometrik yüz imzası — BİYOMETRİK kimlik DEĞİL, sürücü-değişti tespiti)
+    driver_id_change_threshold: float = Field(default=0.18)   # imza farkı bu üstüyse "sürücü değişti"
+
+    # ── Emniyet kemeri (MediaPipe Pose + çapraz şerit Canny/Hough heuristiği) ──
+    # NEDEN: COCO'da kemer sınıfı yok, fine-tune gelene kadar köprü. Heuristic → muhafazakâr.
+    seatbelt_enabled: bool = Field(default=True)              # FPS düşükse / yanlış pozitif çoksa False
+    seatbelt_pose_conf: float = Field(default=0.4)            # MediaPipe Pose min tespit güveni
+    seatbelt_min_visibility: float = Field(default=0.5)       # omuz/kalça görünürlük eşiği (altında karar verme)
+    seatbelt_canny_low: int = Field(default=50)              # kenar tespiti alt eşik
+    seatbelt_canny_high: int = Field(default=150)            # kenar tespiti üst eşik
+    seatbelt_min_line_ratio: float = Field(default=0.45)      # kemer çizgisi min uzunluk / gövde köşegeni
+    seatbelt_min_angle_deg: float = Field(default=25.0)       # çapraz şerit açı alt sınırı
+    seatbelt_max_angle_deg: float = Field(default=65.0)       # çapraz şerit açı üst sınırı
+    seatbelt_persist_frames: int = Field(default=5)           # kaç ardışık karede kemer görülmezse "yok" (muhafazakâr)
+
     # Hız tahmini (kalibrasyonsuz bbox-alan modeli)
     speed_ppm_exponent: float = Field(default=0.65)
     speed_calibration_k: float = Field(default=900.0)        # saha kalibrasyonu ile ayarlanır

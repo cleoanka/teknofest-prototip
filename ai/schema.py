@@ -57,6 +57,18 @@ class DriverState(BaseModel):
     headphone: bool = False
     passenger_phone: bool = False    # Yolcu tarafında telefon (tehlike sayılmaz)
 
+    # MediaPipe Hands el-yüz yakınlık sinyalleri (YOLO ile füzyon — bkz. ai/mp_cabin.py)
+    driver_present: bool = False     # Sürücü ROI'sinde yüz tespit edildi mi
+    hands_detected: int = 0          # Sürücü ROI'sinde görülen el sayısı (0-2)
+    hand_near_ear: bool = False      # El kulağa yakın → telefon/kulaklık delili
+    hand_near_mouth: bool = False    # El ağıza yakın → sigara delili
+    # Geometrik yüz imzası (BİYOMETRİK kimlik DEĞİL): aynı sürücü mü değişti mi takibi
+    driver_signature: Optional[str] = None
+    driver_changed: bool = False     # İmza önceki kareye göre belirgin değişti
+
+    # Emniyet kemeri (MediaPipe Pose + çapraz şerit heuristiği — bkz. ai/mp_seatbelt.py)
+    seatbelt_on: Optional[bool] = None  # None=bilinmiyor/gövde net değil, True=takılı, False=yok
+
 
 class Vehicle(BaseModel):
     present: bool = False
