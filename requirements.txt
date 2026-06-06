@@ -8,6 +8,14 @@ websockets==14.1
 python-multipart==0.0.20
 httpx==0.28.1
 
+# Güvenlik & Rate limiting (ÖTR: JWT RS256 + 100 req/dak)
+PyJWT[crypto]>=2.9.0
+slowapi==0.1.9
+
+# Observability — Prometheus /metrics (Grafana entegrasyonu)
+prometheus-fastapi-instrumentator==6.1.0
+prometheus-client>=0.19.0
+
 # Görüntü işleme / YZ çıkarımı
 numpy>=1.26,<2.2
 opencv-python-headless==4.10.0.84
