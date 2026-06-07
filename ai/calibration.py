@@ -25,6 +25,7 @@ import numpy as np
 from ai.schema import BBox
 from ai.tracking import Track, KalmanSpeed1D
 from ai.homography import GroundHomography
+from ai.plate_pnp import estimate_plate_pose, default_focal_px, PlatePose
 
 
 # TR Tip-1 plaka en/boy oranı: 520/120 ≈ 4.33. Plaka kameraya dik (cepheden)
@@ -147,6 +148,12 @@ class MetricSpeedEstimator:
         self._kalman: dict = {}
         # Aşama 4 — şerit homografisi (kurulursa ppm(y)'ye göre ÖNCELİKLİ ölçek kaynağı)
         self.homography: Optional[GroundHomography] = None
+        # Katman 2 — kamera odağı (px). camera_focal_px verilmezse ilk karede HFOV'den
+        # türetilip burada saklanır; PnP ppm = focal/Z bu odağı kullanır.
+        self._focal_px: Optional[float] = getattr(settings, "camera_focal_px", None)
+        self._principal: Optional[Tuple[float, float]] = None
+        # Çapraz doğrulama/teşhis için en son geçerli PnP pozu (yaw/pitch/reproj).
+        self.last_pose: Optional[PlatePose] = None
 
     def set_homography(self, homography: Optional[GroundHomography]) -> None:
         """Yer düzlemi homografisini ata (§7.1: B kaynağı A'dan önceliklidir)."""
@@ -163,6 +170,54 @@ class MetricSpeedEstimator:
         if ppm is not None:
             # Plaka alt kenarı yere en yakın referans yüksekliği
             self.scale.add(plate_bbox.y2, ppm, weight=1.0)
+
+    def _ensure_intrinsics(self, frame_w: int, frame_h: int) -> Tuple[float, Tuple[float, float]]:
+        """Odak (px) ve asal noktayı (görüntü merkezi) hazırla/cache'le.
+
+        camera_focal_px verilmediyse yatay FOV varsayımından kare genişliğiyle
+        türetilir (default_focal_px). Asal nokta görüntü merkezi alınır.
+        """
+        if self._focal_px is None or self._focal_px <= 1.0:
+            self._focal_px = default_focal_px(
+                frame_w, getattr(self.s, "camera_hfov_deg", 55.0))
+        if self._principal is None:
+            self._principal = (frame_w / 2.0, frame_h / 2.0)
+        return self._focal_px, self._principal
+
+    def observe_plate_pose(self, corners, frame_w: int, frame_h: int) -> bool:
+        """Katman 2/3 — plaka 4 köşesinden düzlemsel PnP ile foreshortening-bağımsız
+        ppm topla (§4.1'in tam çözümü).
+
+        plate_ppm() eğik plakayı (aspect sapması) atarken bu, açıyı çözerek o ölçümü
+        KURTARIR: ppm = focal/Z açıdan bağımsızdır. Pose makul (Z aralıkta, tilt sınır
+        altında, reprojeksiyon düşük) ise yüksek ağırlıkla ScaleField'e eklenir.
+
+        Dönüş: True → pose kullanıldı (çağıran observe_plate'i ATLAMALI, çift sayım olmasın).
+               False → pose çıkmadı; çağıran bbox tabanlı observe_plate'e düşmeli.
+        """
+        if not getattr(self.s, "plate_pnp_enabled", True) or corners is None:
+            return False
+        focal, pp = self._ensure_intrinsics(frame_w, frame_h)
+        pose = estimate_plate_pose(
+            corners, focal, pp,
+            plate_w_m=self.s.plate_width_m,
+            plate_h_m=getattr(self.s, "plate_real_height_mm", 112.0) / 1000.0,
+            max_reproj_px=getattr(self.s, "plate_pnp_max_reproj_px", 6.0),
+            min_distance_m=getattr(self.s, "plate_pnp_min_distance_m", 1.0),
+            max_distance_m=getattr(self.s, "plate_pnp_max_distance_m", 120.0),
+        )
+        if pose is None:
+            return False
+        if pose.tilt_deg > getattr(self.s, "plate_pnp_max_tilt_deg", 60.0):
+            return False
+        if not np.isfinite(pose.ppm) or pose.ppm <= 0:
+            return False
+        # ppm(y) ölçek-alanını besle. Referans yükseklik: plakanın alt kenarı (yere yakın).
+        y_ref = float(max(pt[1] for pt in corners))
+        self.scale.add(y_ref, pose.ppm,
+                       weight=getattr(self.s, "plate_pnp_weight", 1.2))
+        self.last_pose = pose
+        return True
 
     def observe_vehicle(self, vehicle_bbox: BBox, vtype: Optional[str]) -> None:
         """Aşama 2 — araç bbox genişliğinden sınıf-bazlı ppm yedeği (§4.2).
@@ -236,7 +291,7 @@ class MetricSpeedEstimator:
 
         Aşama 3: tek-kare yerine **pencere** üzerinden medyan hız + **fiziksel
         olmayan ivme reddi** (medyandan `speed_max_accel_mps2·Δt`'den fazla sapan
-        adımlar atılır) + track-başı **EMA** düzgünleştirme.
+        adımlar atılır) + track-başı **Kalman** düzgünleştirme (KalmanSpeed1D).
         """
         if track is None:
             return None, False
