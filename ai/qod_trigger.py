@@ -11,6 +11,9 @@ Koşullar:
   C — plaka ROI var ama OCR güveni düşük
   D — araç ROI çizgisini geçti        (okuma menziline girdi)
   E — araç içi nesne sınıfı sınır olasılıkta (0.4-0.6)
+  F — ani fren / olası kaza (~1 sn'de büyük hız düşüşü) → ANINDA Kritik
+      (zaten ~1 sn'lik pencerede doğrulanmış acil-durum sinyali; ardışık-pozitif
+      beklemek "Kaza Tespit ve Acil Durum" senaryosunun amacına aykırı olurdu)
 
 Bırakma: güven > release_conf  VEYA  oturum süresi doldu  VEYA  araç ROI dışında.
 
@@ -34,6 +37,7 @@ class TriggerContext:
     plate_roi_present: bool = False
     plate_ocr_conf: float = 0.0
     ambiguous_object_confs: List[float] = field(default_factory=list)
+    harsh_braking: bool = False           # ani fren / olası kaza (F — anlık tetik)
 
 
 @dataclass
@@ -70,6 +74,8 @@ class QoDTriggerEngine:
         if any(s.qod_ambiguous_low <= c <= s.qod_ambiguous_high
                for c in ctx.ambiguous_object_confs):
             reasons.append("E:sinir_olasilik")
+        if ctx.harsh_braking:
+            reasons.append("F:ani_fren")
         return reasons
 
     def evaluate(self, ctx: TriggerContext, dt_s: float = 0.5) -> TriggerDecision:
@@ -80,14 +86,25 @@ class QoDTriggerEngine:
         decision = TriggerDecision(should_be_critical=self.is_critical, reasons=reasons)
 
         if not self.is_critical:
-            # Normal mod: iki ardışık pozitif -> Kritik'e geç
-            self._consecutive = self._consecutive + 1 if positive else 0
-            if self._consecutive >= s.qod_consecutive_required:
+            if ctx.harsh_braking:
+                # Acil durum: ani fren zaten ~1 sn'lik pencerede doğrulanmış bir
+                # sinyaldir; ardışık-pozitif beklemeden anında Kritik'e geç
+                # (kaza müdahale senaryosu — 5G bant genişliği derhal artırılır).
                 self.is_critical = True
                 self._session_age_s = 0.0
                 self._consecutive = 0
                 decision.should_be_critical = True
                 decision.fired_this_cycle = True
+                decision.reasons = ["F:ani_fren"]
+            else:
+                # Normal mod: iki ardışık pozitif -> Kritik'e geç
+                self._consecutive = self._consecutive + 1 if positive else 0
+                if self._consecutive >= s.qod_consecutive_required:
+                    self.is_critical = True
+                    self._session_age_s = 0.0
+                    self._consecutive = 0
+                    decision.should_be_critical = True
+                    decision.fired_this_cycle = True
         else:
             # Kritik mod: bırakma koşulları
             self._session_age_s += dt_s

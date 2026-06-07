@@ -95,6 +95,7 @@ DRIVER_STATE_FLAGS = ["fatigue", "phone_use", "smoking", "no_seatbelt", "headpho
 RISK_WEIGHTS = {
     "phone_use": 40,
     "fatigue": 30,
+    "harsh_braking": 35,   # ani fren / olası kaza — yüksek ağırlık (kaza sonrası zincirleme risk)
     "smoking": 20,
     "overspeed": 15,
     "no_seatbelt": 15,
@@ -158,6 +159,12 @@ class Settings(BaseSettings):
     # varsayılan KAPALI. Asıl sigara sinyali el-parmak↔ağız geometrisi.
     driver_smoke_brightpixel: bool = Field(default=False)
 
+    # Çoklu nesne takipçisi (real mod)
+    # bytetrack → YOLOv8 dahili ByteTrack (hızlı, kamera hareketi yok)
+    # botsort   → BoT-SORT (kamera titremesine dayanıklı, ReID opsiyonel)
+    # iou       → saf IOU tracker (dahili, ByteTrack/BoT-SORT gerekmez)
+    tracker_type: str = Field(default="bytetrack")
+
     # QoD tetik motoru (500 ms ihtiyaç-bazlı değerlendirme döngüsü)
     qod_eval_period_ms: int = Field(default=500)
     qod_bbox_growth_threshold: float = Field(default=0.18)   # A: yaklaşma
@@ -195,7 +202,11 @@ class Settings(BaseSettings):
     # Hız tahmini (kalibrasyonsuz bbox-alan modeli)
     speed_ppm_exponent: float = Field(default=0.65)
     speed_calibration_k: float = Field(default=900.0)        # saha kalibrasyonu ile ayarlanır
-    speed_limit_kmh: float = Field(default=50.0)
+    speed_limit_kmh: float = Field(default=50.0)             # vtype haritada karşılığı yoksa yedek
+    # Araç tipine göre dinamik hız limiti (TR trafik mevzuatı genel sınırlar) — risk skoru bunu kullanır
+    speed_limit_by_vtype: Dict[str, float] = Field(
+        default_factory=lambda: {"car": 120.0, "minibus": 100.0, "bus": 100.0,
+                                 "truck": 90.0, "motorcycle": 120.0})
 
     # Plaka YOLO dedektörü
     lp_model_path: str = Field(default="")        # LP_MODEL_PATH → yerel .pt yolu (öncelik 1)
@@ -239,8 +250,20 @@ class Settings(BaseSettings):
     vehicle_ppm_weight: float = Field(default=0.25)         # araç-genişliği ppm örnek ağırlığı (plaka=1.0)
     speed_window_frames: int = Field(default=6)             # hız regresyon penceresi (Aşama 3)
     speed_max_accel_mps2: float = Field(default=8.0)        # fiziksel-olmayan ivme reddi (Aşama 3)
-    speed_ema_alpha: float = Field(default=0.4)             # track-başı EMA düzgünleştirme (Aşama 3)
+    speed_ema_alpha: float = Field(default=0.4)             # EMA alfa (geriye uyum; Kalman Q/R tercih edilir)
+    speed_kalman_q: float = Field(default=3.0)              # Kalman süreç gürültüsü (hız değişim hızı)
+    speed_kalman_r: float = Field(default=8.0)              # Kalman ölçüm gürültüsü (BEV hız belirsizliği)
     speed_metric_max_kmh: float = Field(default=200.0)      # akıl sağlığı üst sınırı
+    # Radar/ANPR mantığı: araç kadraj kenarına değdiğinde (kırpılma + homografi
+    # ekstrapolasyonu nedeniyle ölçüm güvenilmez) o kare için hız hesaplanmaz;
+    # son geçerli ölçüm "mühürlenip" gösterilmeye devam eder. Oran tabanlı —
+    # 3840x2160'ta %1.5 ≈ 58x32px ölü bölge; farklı çözünürlüklerde tutarlı kalır.
+    speed_edge_margin_pct: float = Field(default=0.015)
+    # Ani fren / olası kaza tespiti: ~1 sn'lik pencerede hız düşüşü eşiği aşılırsa
+    # (ör. 100→20 km/h) hem risk skoruna "ani_fren" faktörü eklenir hem QoD motoru
+    # tetiklenir (5G bant genişliği acil-durum moduna geçer).
+    harsh_braking_window_s: float = Field(default=0.8)       # bakılacak geçmiş penceresi (s)
+    harsh_braking_decel_kmh_s: float = Field(default=-50.0)  # eşik: km/h kaybı / saniye (negatif=yavaşlama)
     # Aşama 4 — otomatik şerit homografisi (best-effort; VARSAYILAN KAPALI, cv2 ister)
     homography_auto: bool = Field(default=False)            # açıksa kareden şerit→homografi dene
     homography_calib_interval: int = Field(default=30)      # her N karede bir kalibrasyon denemesi

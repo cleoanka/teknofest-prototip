@@ -29,118 +29,150 @@ if _ROOT not in sys.path:
 
 import numpy as np
 
-# Renk tanımları (BGR)
-CLR_VEHICLE  = (0, 200, 0)       # Yeşil — araç kutusu
-CLR_PLATE    = (0, 220, 255)      # Sarı — plaka kutusu
-CLR_DRIVER   = (255, 120, 0)      # Mavi — sürücü ROI
-CLR_PASSENGER = (0, 120, 255)     # Turuncu — yolcu ROI
-CLR_PERSON   = (255, 255, 255)    # Beyaz — kişi tespiti
-CLR_PHONE    = (0, 0, 255)        # Kırmızı — telefon
-CLR_SWERVING = (0, 0, 220)        # Kırmızı — swerving uyarısı
+# Renk tanımları — Supervision sv.Color (RGB). Eski cv2/BGR sabitlerinin RGB karşılığı.
+_SV_PALETTE = {
+    "vehicle":   (0, 200, 0),      # Yeşil — araç kutusu
+    "swerving":  (220, 0, 0),      # Kırmızı — swerving uyarısı (araç kutusu rengini değiştirir)
+    "plate":     (255, 220, 0),    # Sarı — plaka kutusu
+    "driver":    (0, 120, 255),    # Mavi — sürücü ROI
+    "passenger": (255, 120, 0),    # Turuncu — yolcu ROI
+    "person":    (255, 255, 255),  # Beyaz — kişi tespiti
+    "phone":     (255, 0, 0),      # Kırmızı — telefon
+}
 
 
-def draw_box(img, x1, y1, x2, y2, color, label: str = "", thickness: int = 2):
-    try:
+def _xyxy(bbox: dict):
+    return np.array([[bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]]], dtype=float)
+
+
+class FrameAnnotator:
+    """Supervision tabanlı kare çizimi — sv.BoxAnnotator/LabelAnnotator/TraceAnnotator.
+
+    Eski el-yapımı cv2.rectangle/putText (`draw_box`) yerine; kategori başına sabit
+    renkli annotator çiftleri. Araç yörüngesi sv.TraceAnnotator ile BOTTOM_CENTER
+    (= bbox alt-orta, "foot point") konumundan çizilir — BEV/homografi hız hesabının
+    izlediği nokta ile aynı, böylece çizilen iz gerçek hız hesabını görselleştirir.
+
+    NOT: Risk paneli ve kare-bilgisi HUD'ı serbest-biçimli paneller olduğundan
+    (sv'nin kutu/etiket modeline uymaz) cv2 ile çizilmeye devam eder — annotasyon
+    değil, özel dashboard öğeleridir.
+
+    Video boyunca TEK instance kullanılmalı: TraceAnnotator iz geçmişini saklar;
+    her kare için yeniden oluşturmak izi sıfırlar.
+    """
+
+    def __init__(self):
+        import supervision as sv
+        self._sv = sv
+        colors = {k: sv.Color(r=r, g=g, b=b) for k, (r, g, b) in _SV_PALETTE.items()}
+        self._box = {
+            k: sv.BoxAnnotator(color=c, thickness=3 if k in ("vehicle", "swerving") else 2,
+                               color_lookup=sv.ColorLookup.INDEX)
+            for k, c in colors.items()
+        }
+        self._label = {
+            k: sv.LabelAnnotator(color=c, text_color=sv.Color.BLACK,
+                                 text_scale=0.5, text_thickness=1, text_padding=4,
+                                 color_lookup=sv.ColorLookup.INDEX)
+            for k, c in colors.items()
+        }
+        self._trace = sv.TraceAnnotator(color=colors["vehicle"], thickness=2,
+                                         trace_length=40, position=sv.Position.BOTTOM_CENTER,
+                                         color_lookup=sv.ColorLookup.INDEX)
+
+    def _detection(self, bbox: dict, confidence: float = 1.0, tracker_id=None):
+        kw = {"xyxy": _xyxy(bbox), "confidence": np.array([confidence], dtype=float)}
+        if tracker_id is not None:
+            kw["tracker_id"] = np.array([int(tracker_id)], dtype=int)
+        return self._sv.Detections(**kw)
+
+    def _box_label(self, scene, key: str, bbox: dict, label: str, tracker_id=None):
+        det = self._detection(bbox, tracker_id=tracker_id)
+        scene = self._box[key].annotate(scene, det)
+        scene = self._label[key].annotate(scene, det, labels=[label])
+        return scene, det
+
+    def annotate(self, frame: np.ndarray, result_dict: dict) -> np.ndarray:
+        """FrameResult dict'inden alınan sonuçları kareye çiz."""
+        scene = frame.copy()
+        vehicle = result_dict.get("vehicle", {})
+        driver_state = result_dict.get("driver", {})
+        risk = result_dict.get("risk", {})
+
+        # Araç kutusu + etiket + yörünge (foot point izi — homografi ile aynı nokta)
+        vbbox = vehicle.get("bbox")
+        if vbbox:
+            tid = vehicle.get("track_id")
+            swerving = vehicle.get("swerving", False)
+            key = "swerving" if swerving else "vehicle"
+            label_parts = [vehicle.get("vtype") or "araç"]
+            plate_text = vehicle.get("plate", {}).get("text")
+            if plate_text:
+                label_parts.append(plate_text)
+            speed = vehicle.get("speed_kmh")
+            if speed is not None:
+                tag = "" if vehicle.get("speed_is_calibrated") else "~"   # ~ = kalibrasyonsuz tahmin
+                label_parts.append(f"{tag}{speed} km/h")
+            if swerving:
+                label_parts.append("⚠ SWERVING")
+            scene, det = self._box_label(scene, key, vbbox, " | ".join(label_parts), tracker_id=tid)
+            if tid is not None:
+                scene = self._trace.annotate(scene, det)
+
+        # Plaka kutusu (sarı)
+        pbbox = vehicle.get("plate_bbox")
+        if pbbox:
+            plate_text = vehicle.get("plate", {}).get("text") or "?"
+            scene, _ = self._box_label(scene, "plate", pbbox, f"PLAKA: {plate_text}")
+
+        # Sürücü ROI (mavi)
+        dbbox = vehicle.get("driver_bbox")
+        if dbbox:
+            phone_label = " [TELEFON!]" if driver_state.get("phone_use") else ""
+            scene, _ = self._box_label(scene, "driver", dbbox, f"SÜRÜCÜ{phone_label}")
+
+        # Yolcu ROI (turuncu)
+        psbbox = vehicle.get("passenger_bbox")
+        if psbbox:
+            pax_phone = " [telefon]" if driver_state.get("passenger_phone") else ""
+            scene, _ = self._box_label(scene, "passenger", psbbox, f"YOLCU{pax_phone}")
+
+        # Tespit edilen nesneler (kişi, telefon)
+        for det in result_dict.get("detections", []):
+            lbl = det.get("label", "")
+            bb = det.get("bbox", {})
+            if lbl == "phone":
+                scene, _ = self._box_label(scene, "phone", bb, f"telefon {det.get('confidence', 0):.0%}")
+            elif lbl == "person":
+                scene, _ = self._box_label(scene, "person", bb, f"kişi {det.get('confidence', 0):.0%}")
+
+        return self._draw_hud(scene, result_dict, risk, vehicle)
+
+    @staticmethod
+    def _draw_hud(scene, result_dict, risk, vehicle):
+        """Risk paneli + kare bilgisi — serbest-biçimli HUD, cv2 ile (annotasyon değil)."""
         import cv2
-        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-        cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
-        if label:
-            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
-            cv2.rectangle(img, (x1, y1 - th - 6), (x1 + tw + 8, y1), color, -1)
-            cv2.putText(img, label, (x1 + 4, y1 - 4),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1, cv2.LINE_AA)
-    except Exception:
-        pass
+        h, w = scene.shape[:2]
+        score = risk.get("score", 0)
+        level = risk.get("level", "LOW")
+        factors = ", ".join(risk.get("factors", []))
+        risk_color = (0, 0, 200) if score >= 85 else (0, 128, 255) if score >= 60 \
+            else (0, 200, 255) if score >= 30 else (0, 200, 0)
+        cv2.rectangle(scene, (w - 260, 10), (w - 10, 90), (20, 20, 20), -1)
+        cv2.putText(scene, f"Risk: {score}/100 [{level}]", (w - 250, 35),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, risk_color, 1, cv2.LINE_AA)
+        if factors:
+            cv2.putText(scene, factors[:35], (w - 250, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.40, (200, 200, 200), 1, cv2.LINE_AA)
 
-
-def annotate_frame(frame: np.ndarray, result_dict: dict) -> np.ndarray:
-    """FrameResult dict'inden alınan sonuçları kareye çiz."""
-    try:
-        import cv2
-    except ImportError:
-        return frame
-
-    annotated = frame.copy()
-    h, w = annotated.shape[:2]
-
-    vehicle = result_dict.get("vehicle", {})
-    driver_state = result_dict.get("driver", {})
-    risk = result_dict.get("risk", {})
-
-    # Araç kutusu
-    vbbox = vehicle.get("bbox")
-    if vbbox:
+        frame_id = result_dict.get("frame_id", 0)
+        latency = result_dict.get("latency_ms", 0)
         plate_text = vehicle.get("plate", {}).get("text") or ""
-        speed = vehicle.get("speed_kmh")
-        swerving = vehicle.get("swerving", False)
-        vtype = vehicle.get("vtype") or "araç"
-        label_parts = [vtype]
+        info = f"Kare #{frame_id} | {latency:.0f}ms"
         if plate_text:
-            label_parts.append(plate_text)
-        if speed is not None:
-            label_parts.append(f"{speed} km/h")
-        veh_label = " | ".join(label_parts)
-        color = CLR_SWERVING if swerving else CLR_VEHICLE
-        draw_box(annotated, vbbox["x1"], vbbox["y1"], vbbox["x2"], vbbox["y2"],
-                 color, veh_label, thickness=3)
-        if swerving:
-            cv2.putText(annotated, "⚠ SWERVING", (int(vbbox["x1"]), int(vbbox["y2"]) + 22),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, CLR_SWERVING, 2, cv2.LINE_AA)
-
-    # Plaka kutusu (sarı) — araç kutusundan ayrı
-    pbbox = vehicle.get("plate_bbox")
-    if pbbox:
-        plate_text = vehicle.get("plate", {}).get("text") or "?"
-        draw_box(annotated, pbbox["x1"], pbbox["y1"], pbbox["x2"], pbbox["y2"],
-                 CLR_PLATE, f"PLAKA: {plate_text}", thickness=2)
-
-    # Sürücü ROI (mavi)
-    dbbox = vehicle.get("driver_bbox")
-    if dbbox:
-        phone_label = " [TELEFON!]" if driver_state.get("phone_use") else ""
-        draw_box(annotated, dbbox["x1"], dbbox["y1"], dbbox["x2"], dbbox["y2"],
-                 CLR_DRIVER, f"SÜRÜCÜ{phone_label}", thickness=1)
-
-    # Yolcu ROI (turuncu)
-    psbbox = vehicle.get("passenger_bbox")
-    if psbbox:
-        pax_phone = " [telefon]" if driver_state.get("passenger_phone") else ""
-        draw_box(annotated, psbbox["x1"], psbbox["y1"], psbbox["x2"], psbbox["y2"],
-                 CLR_PASSENGER, f"YOLCU{pax_phone}", thickness=1)
-
-    # Tespit edilen nesneler (kişi, telefon)
-    for det in result_dict.get("detections", []):
-        lbl = det.get("label", "")
-        bb = det.get("bbox", {})
-        if lbl == "phone":
-            draw_box(annotated, bb["x1"], bb["y1"], bb["x2"], bb["y2"],
-                     CLR_PHONE, f"telefon {det.get('confidence', 0):.0%}")
-        elif lbl == "person":
-            draw_box(annotated, bb["x1"], bb["y1"], bb["x2"], bb["y2"],
-                     CLR_PERSON, f"kişi {det.get('confidence', 0):.0%}")
-
-    # Risk skoru (sağ üst)
-    score = risk.get("score", 0)
-    level = risk.get("level", "LOW")
-    factors = ", ".join(risk.get("factors", []))
-    risk_color = (0, 0, 200) if score >= 85 else (0, 128, 255) if score >= 60 else (0, 200, 255) if score >= 30 else (0, 200, 0)
-    cv2.rectangle(annotated, (w - 260, 10), (w - 10, 90), (20, 20, 20), -1)
-    cv2.putText(annotated, f"Risk: {score}/100 [{level}]", (w - 250, 35),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.55, risk_color, 1, cv2.LINE_AA)
-    if factors:
-        cv2.putText(annotated, factors[:35], (w - 250, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.40, (200, 200, 200), 1, cv2.LINE_AA)
-
-    # Kare bilgisi (sol üst)
-    frame_id = result_dict.get("frame_id", 0)
-    latency = result_dict.get("latency_ms", 0)
-    plate_text = vehicle.get("plate", {}).get("text") or ""
-    info = f"Kare #{frame_id} | {latency:.0f}ms"
-    if plate_text:
-        info += f" | {plate_text}"
-    cv2.putText(annotated, info, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 1, cv2.LINE_AA)
-
-    return annotated
+            info += f" | {plate_text}"
+        cv2.putText(scene, info, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 1, cv2.LINE_AA)
+        return scene
 
 
 def process_video(
@@ -168,6 +200,11 @@ def process_video(
         import cv2
     except ImportError:
         print("[HATA] opencv-python kurulu değil.")
+        return {}
+    try:
+        annotator = FrameAnnotator()
+    except ImportError:
+        print("[HATA] supervision kurulu değil — `pip install supervision` gerekir.")
         return {}
 
     # Pipeline yükle
@@ -254,8 +291,8 @@ def process_video(
             print(f"  [Kare {frame_idx}] Risk: {result.risk.score} [{result.risk.level}] "
                   f"— {', '.join(result.risk.factors)}")
 
-        # Annotate
-        annotated = annotate_frame(frame_proc, result_dict)
+        # Annotate (Supervision: BoxAnnotator/LabelAnnotator/TraceAnnotator)
+        annotated = annotator.annotate(frame_proc, result_dict)
 
         if writer:
             writer.write(annotated)
