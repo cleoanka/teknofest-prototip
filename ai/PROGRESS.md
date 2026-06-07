@@ -12,7 +12,7 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 
 **Genel:**
 - Prototip repo **temel alındı**; uzak `cleoanka/teknofest-prototip` ile senkron (K7 akışı).
-- YZ hattı **uçtan uca çalışıyor**: mock (**308 test yeşil**) **ve** gerçek GPU (MPS/CUDA + YOLOv8 + plaka modeli) doğrulandı.
+- YZ hattı **uçtan uca çalışıyor**: mock (**326 test yeşil**) **ve** gerçek GPU (MPS/CUDA + YOLOv8 + plaka modeli) doğrulandı.
 - Eğitim/veri hattı **kodlandı ve test edildi** (aşağıdaki modüller).
 
 **Hazır olan YZ modülleri:**
@@ -361,7 +361,32 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
   sigara %0; video_3 sigara %0 (temiz). Mock 18 saf-mantık testi yeşil. video_1'de telefon %13 (profil
   karışması, kabul edildi — sigara sinyali baskın). Bkz. **K-010**.
 
+### ✅ Tamamlanan (7 Haziran — plaka köşelerinden PnP: foreshortening-bağımsız metrik ölçek)
+> Kapsam: `gercek_hiz_plani.md` §4.1.1 (Katman 2). Kullanıcı tespiti: "gerçek hızı plaka
+> boyutundan buluyoruz; araç sağa/sola dönünce genişlik kısalır — açıyı çözmemiz lazım."
+> Ayrıntılı günlük: **`ai/gercek_hiz_progress.md`** (YENİ — metrik hız iş kolu özel).
+
+- **Sorun:** `plate_ppm = w_piksel/0.520` plaka açılınca (yaw) `cos(yaw)` ile şişer; eski
+  kod aspect sapmasıyla bunu tespit edip ölçümü **atıyordu** → açılı yol kamerasında çok
+  veri kaybı. Foreshortening'i **elemek yerine ÇÖZ.**
+- **`ai/plate_pnp.py` (YENİ):** `estimate_plate_pose()` — 4 plaka köşesi + 520×112 mm + odak
+  → **düzlemsel PnP** (Zhang homografi ayrıştırması, **saf numpy, cv2 yok** = K4). Çıktı:
+  derinlik `Z`, yaw, pitch ve **`ppm = focal/Z`** (foreshortening'den **bağımsız** ölçek).
+  `default_focal_px()` HFOV≈55°'den focal tahmini; reprojeksiyon/Z/tilt makullük geçitleri.
+- **`ai/calibration.py`:** `observe_plate_pose()` — PnP ppm'i `ScaleField`'e **yüksek ağırlıkla**
+  (1.2) besler, açılı plakaları kurtarır. `True`→pipeline `observe_plate`'i atlar (çift sayım
+  yok), `False`→bbox-genişliği fallback. Füzyon önceliği değişmedi (homografi B > PnP-ppm A >
+  sezgisel). `last_pose` çapraz doğrulama (§8.2) için saklanıyor.
+- **`ai/pipeline.py`:** `plate_corners` varsa PnP, yoksa eski yol (kenar filtresi korundu).
+- **`config/settings.py`:** `plate_pnp_enabled`, `camera_focal_px/hfov_deg`, `plate_pnp_weight`,
+  reproj/mesafe/tilt sınırları.
+- **Ölçülen (sentetik, §8.1):** `tests/test_plate_pnp.py` **13 test** — frontal derinlik %2,
+  reproj <0.5px, yaw=30°→±3°; **kanıt:** 35° yaw'da naif genişlik %10+ yanılırken **PnP %3**.
+  **308→326 yeşil**, regresyon yok. Commit `ef61609`. Detay/ölçüm: `gercek_hiz_progress.md`.
+
 ### ⏭️ Sıradaki (öncelik sırası)
+0. **PnP §8.2 çapraz doğrulama:** `last_pose` PnP-hızı ↔ homografi hızı `methods_agree` ile
+   karşılaştırılıp `speed_is_calibrated` güveni raporlansın (üç yöntem yakınsa yüksek güven).
 1. **cigarette/seatbelt/headphone verisi:** Roboflow/manuel → bu 3 sürücü-davranışı sınıfını da kapat (`merge_yolo` ile kat).
 2. **INT8 export** (`train --export engine-int8`) + gerçek FPS ölçümü (plan Bölüm 9).
 3. truck (.53) gerekirse biraz daha güçlendir (daha çok COCO/BDD).
