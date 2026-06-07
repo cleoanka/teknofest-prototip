@@ -86,8 +86,8 @@ class Vehicle(BaseModel):
     # 4-köşe perspektif çerçevesi: [[x0,y0],[x1,y1],[x2,y2],[x3,y3]] TL→TR→BR→BL sırası.
     # plate_bbox'tan farklı olarak yamuk plakaları gerçek şekliyle temsil eder (görselleştirme).
     plate_corners: Optional[List[List[float]]] = None
-    driver_bbox: Optional[BBox] = None         # Sürücü tarafı ROI (mavi)
-    passenger_bbox: Optional[BBox] = None      # Yolcu tarafı ROI (turuncu)
+    driver_bbox: Optional[BBox] = None         # Sürücü ROI (mavi) — kabindeki en sağ-alt kişi; kişi yoksa geometrik sağ-yarı
+    passenger_bbox: Optional[BBox] = None      # Yolcu(lar) ROI (turuncu) — sürücü dışı kişilerin kapsayan kutusu (risk-dışı)
     swerving: bool = False                     # Zigzag/şerit ihlali
     harsh_braking: bool = False                 # Ani fren (~1 sn'de büyük hız düşüşü) — olası kaza
 

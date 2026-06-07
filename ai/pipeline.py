@@ -53,6 +53,16 @@ def _dominant_color(crop: np.ndarray) -> Optional[str]:
     return "mavi"
 
 
+def _union_bbox(boxes: "list[BBox]") -> Optional[BBox]:
+    """Birden çok kutuyu kapsayan tek dikdörtgen (yolcuların görselleştirme kutusu)."""
+    if not boxes:
+        return None
+    return BBox(
+        x1=min(b.x1 for b in boxes), y1=min(b.y1 for b in boxes),
+        x2=max(b.x2 for b in boxes), y2=max(b.y2 for b in boxes),
+    )
+
+
 def _near_frame_edge(bbox: BBox, w: int, h: int, margin_pct: float) -> bool:
     """Bbox kadrajın kenarına değiyor mu? (radar/ANPR "ölü bölge" mantığı)
 
@@ -284,6 +294,10 @@ class Pipeline:
 
         vehicle = Vehicle()
         primary_track = None
+        # Kişi-bazlı sürücü/yolcu ROI'leri (Blok C'de doldurulur, Blok E'ye taşınır)
+        driver_roi_box = None
+        passenger_person_boxes: list = []
+        driver_is_person = False
 
         if veh_dets:
             idx = max(range(len(veh_dets)), key=lambda i: veh_dets[i].bbox.area)
@@ -336,9 +350,16 @@ class Pipeline:
             if primary_track:
                 vehicle.swerving = primary_track.is_swerving()
 
-            # Sürücü / yolcu ROI
-            vehicle.driver_bbox = DriverMonitor.driver_roi(vehicle.bbox, (h, w))
-            vehicle.passenger_bbox = DriverMonitor.passenger_roi(vehicle.bbox, (h, w))
+            # Sürücü / yolcu ROI — kişi-bazlı (kabindeki en sağ-alttaki kişi = sürücü).
+            # Bir kez hesaplanır; görselleştirme + Blok E (assess) aynı sonucu paylaşır.
+            driver_roi_box, passenger_person_boxes, driver_is_person = \
+                self.driver.select_rois(detections, vehicle.bbox, (h, w))
+            vehicle.driver_bbox = driver_roi_box
+            if passenger_person_boxes:
+                vehicle.passenger_bbox = _union_bbox(passenger_person_boxes)
+            else:
+                # Yolcu kişi yok → görselleştirme için geometrik yedek (risk-dışı kalır)
+                vehicle.passenger_bbox = DriverMonitor.passenger_roi(vehicle.bbox, (h, w))
 
         # Blok D — Plaka tespiti + perspektif düzeltme + araç-id'sine bağlı kararlılık
         #
@@ -485,9 +506,11 @@ class Pipeline:
 
         result.vehicle = vehicle
 
-        # Blok E — sürücü durumu
+        # Blok E — sürücü durumu (Blok C'de seçilen kişi-bazlı ROI'leri yeniden kullan)
         result.driver = self.driver.assess(
-            frame, detections, profile, vehicle_bbox=vehicle.bbox
+            frame, detections, profile, vehicle_bbox=vehicle.bbox,
+            driver_bbox=driver_roi_box, passenger_boxes=passenger_person_boxes,
+            driver_is_person=driver_is_person,
         )
 
         # Blok F — risk skoru

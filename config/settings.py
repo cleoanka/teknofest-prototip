@@ -172,6 +172,19 @@ class Settings(BaseSettings):
     # footage'ta (ön cam yansıması, far, kontrast) yanlış pozitifi yüksek →
     # varsayılan KAPALI. Asıl sigara sinyali el-parmak↔ağız geometrisi.
     driver_smoke_brightpixel: bool = Field(default=False)
+    # ── Sürücü seçimi: kişi-bazlı (geometrik yarı-bölme yerine) ──
+    # NEDEN: Aracı statik olarak sağ/sol yarıya bölmek yolcu ile sürücüyü ayırt
+    # edemiyordu (yolcu sağ yarıya, sürücü sol yarıya taşabilir). Artık araç
+    # kabinindeki 'person' tespitleri arasından KAMERANIN BAKIŞ AÇISINA göre
+    # EN SAĞ-ALTTAKİ kişi sürücü, kalan kişiler yolcu sayılır. Yalnızca SÜRÜCÜ
+    # kişinin kutusuna düşen ihlaller (telefon/sigara/kulaklık) ve sürücü kutusu
+    # üzerinde çalışan MediaPipe geometrisi risk skoruna etki eder; yolcuların
+    # hareketleri risk DIŞIDIR. 'person' tespiti yoksa geometrik yarı-ROI'ye düşülür.
+    driver_person_select: bool = Field(default=True)
+    # "Sağ-alt" skoru: score = right_w*(x2/W) + bottom_w*(y2/H); en yüksek = sürücü.
+    # Ağırlıklar açıya göre ayarlanabilir (ör. tam profilde sağ baskın → right_w↑).
+    driver_select_right_weight: float = Field(default=1.0)
+    driver_select_bottom_weight: float = Field(default=1.0)
 
     # Çoklu nesne takipçisi (real mod)
     # bytetrack → YOLOv8 dahili ByteTrack (hızlı, kamera hareketi yok)

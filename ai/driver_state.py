@@ -1,12 +1,25 @@
 """
 Sürücü durumu — yorgunluk (EAR/PERCLOS), telefon, sigara, kemer, kulaklık.
 
-Türkiye LHD (sol direksiyonlu) araç varsayımı:
-  Kamera önden bakıyorsa sürücü kameranın SAĞ tarafındadır.
-  → Araç bbox'ının sağ yarısı = sürücü ROI, sol yarısı = yolcu ROI.
+SÜRÜCÜ KİM? — kişi-bazlı seçim (geometrik yarı-bölme DEĞİL):
+  Araç kabinindeki 'person' tespitleri arasından, KAMERANIN BAKIŞ AÇISINA göre
+  EN SAĞ-ALTTAKİ kişi SÜRÜCÜ kabul edilir; kalan tüm kişiler YOLCU sayılır.
+  "Sağ-alt" skoru: score = right_w*(x2/W) + bottom_w*(y2/H), en yüksek = sürücü
+  (driver_select_*_weight ile ayarlanır). Sürücü ROI = sürücü kişinin kutusudur.
 
-Telefon kullanımı yalnızca sürücü ROI'sindeyse tehlike olarak işaretlenir.
-Yolcu ROI'sindeki telefon driver.passenger_phone=True olarak ayrı takip edilir.
+  Neden yarı-bölme bırakıldı: aracı statik sağ/sol yarıya bölmek yolcu↔sürücü
+  ayrımında yetersizdi (yolcu sağ yarıya, sürücü sol yarıya taşabilir; eğik açı
+  ikisini de aynı yarıya koyabilir). Kişi kutusu hem ayrımı netleştirir hem de
+  MediaPipe'a tam sürücü crop'u verir.
+
+  'person' tespiti yoksa (uzak/küçük araç, model person üretmedi) → eski
+  geometrik yarı-ROI'ye (Türkiye LHD: sağ yarı = sürücü) GÜVENLİ ŞEKİLDE düşülür.
+
+RİSK YALNIZCA SÜRÜCÜ: telefon/sigara/kulaklık ve MediaPipe geometrisi YALNIZCA
+sürücü kişinin kutusuna düşerse risk bayrağı yakar. Yolcu kutusundaki telefon
+driver.passenger_phone=True olarak yalnızca KAYIT edilir (risk skoruna girmez);
+yolcuların diğer hareketleri (el-yüz geometrisi) hiç analiz edilmez çünkü
+MediaPipe yalnızca sürücü crop'unda çalışır.
 
 TELEFON / SİGARA / KULAKLIK TESPİTİ — neden MediaPipe geometrisi?
   COCO ön-eğitimli YOLO 'cigarette'/'headphone' sınıfını bilmez, 'cell phone'u da
@@ -352,9 +365,10 @@ class DriverMonitor:
     @staticmethod
     def driver_roi(vehicle_bbox: Optional[BBox], frame_shape) -> Optional[BBox]:
         """
-        Türkiye LHD + önden kamera:
+        GEOMETRİK YEDEK (kişi tespiti yoksa). Türkiye LHD + önden kamera:
         Sürücü kameranın SAĞ tarafında → araç bbox sağ yarısı.
         Kabin yüksekliği: araç yüksekliğinin üst %70'i (camdan içeri).
+        Asıl seçim kişi-bazlıdır → bkz. select_rois().
         """
         if not vehicle_bbox:
             return None
@@ -372,7 +386,7 @@ class DriverMonitor:
 
     @staticmethod
     def passenger_roi(vehicle_bbox: Optional[BBox], frame_shape) -> Optional[BBox]:
-        """Yolcu: araç bbox sol yarısı."""
+        """GEOMETRİK YEDEK (kişi tespiti yoksa). Yolcu: araç bbox sol yarısı."""
         if not vehicle_bbox:
             return None
         v = vehicle_bbox
@@ -389,6 +403,54 @@ class DriverMonitor:
     @staticmethod
     def _overlaps(a: BBox, b: BBox) -> bool:
         return not (a.x2 < b.x1 or a.x1 > b.x2 or a.y2 < b.y1 or a.y1 > b.y2)
+
+    @staticmethod
+    def _center_in(inner: BBox, outer: BBox) -> bool:
+        """inner kutusunun merkezi outer (araç) kutusunun içinde mi?
+        Kabin sakini ile yoldan geçen yayayı ayırt etmek için: yaya araç kutusuna
+        kenardan değse bile merkezi dışarıda kalır → elenir."""
+        return (outer.x1 <= inner.cx <= outer.x2) and (outer.y1 <= inner.cy <= outer.y2)
+
+    def select_rois(self, detections: List[Detection], vehicle_bbox: Optional[BBox],
+                    frame_shape) -> Tuple[Optional[BBox], List[BBox], bool]:
+        """
+        Kişi-bazlı sürücü/yolcu ayrımı.
+
+        Araç kabinindeki 'person' tespitleri arasından KAMERANIN BAKIŞ AÇISINA göre
+        EN SAĞ-ALTTAKİ kişiyi sürücü seçer; kalan kişiler yolcudur.
+
+        Dönüş: (driver_box, passenger_boxes, driver_is_person)
+          driver_box        : sürücü ROI'si (kişi kutusu; yoksa geometrik sağ-yarı)
+          passenger_boxes   : yolcu kişi kutuları (risk-dışı bölge listesi)
+          driver_is_person  : sürücü gerçek bir 'person' tespitinden mi seçildi?
+                              (False → geometrik yedek; belirsiz ihlal davranışı değişir)
+
+        'person' tespiti yoksa veya kişi-bazlı seçim kapalıysa geometrik yedeğe düşer.
+        """
+        if not vehicle_bbox:
+            return None, [], False
+
+        if not getattr(self.s, "driver_person_select", True):
+            return self.driver_roi(vehicle_bbox, frame_shape), [], False
+
+        persons = [d.bbox for d in detections
+                   if d.label == "person" and self._center_in(d.bbox, vehicle_bbox)]
+        if not persons:
+            # Kişi yok → eski geometrik davranış (güvenli yedek)
+            return self.driver_roi(vehicle_bbox, frame_shape), [], False
+
+        H = float(frame_shape[0]) if frame_shape and frame_shape[0] else 1.0
+        W = float(frame_shape[1]) if frame_shape and len(frame_shape) > 1 and frame_shape[1] else 1.0
+        rw = float(getattr(self.s, "driver_select_right_weight", 1.0))
+        bw = float(getattr(self.s, "driver_select_bottom_weight", 1.0))
+
+        def bottom_right_score(b: BBox) -> float:
+            # Kutunun SAĞ-ALT köşesi (x2,y2) ne kadar sağ-altta → o kadar yüksek skor
+            return rw * (b.x2 / W) + bw * (b.y2 / H)
+
+        driver = max(persons, key=bottom_right_score)
+        passengers = [b for b in persons if b is not driver]
+        return driver, passengers, True
 
     def _latch_flag(self, key: str, active: bool) -> bool:
         """
@@ -410,25 +472,44 @@ class DriverMonitor:
         return False
 
     def assess(self, frame: np.ndarray, detections: List[Detection], profile: str,
-               vehicle_bbox: Optional[BBox] = None) -> DriverState:
+               vehicle_bbox: Optional[BBox] = None,
+               driver_bbox: Optional[BBox] = None,
+               passenger_boxes: Optional[List[BBox]] = None,
+               driver_is_person: Optional[bool] = None) -> DriverState:
         state = DriverState()
 
-        droi = self.driver_roi(vehicle_bbox, frame.shape if frame is not None else (0, 0))
-        proi = self.passenger_roi(vehicle_bbox, frame.shape if frame is not None else (0, 0))
+        frame_shape = frame.shape if frame is not None else (0, 0)
+        # ROI'ler dışarıdan (pipeline'da bir kez hesaplanıp) geçirilebilir; yoksa
+        # burada kişi-bazlı seçimle üretilir (testler assess'i tek başına çağırabilir).
+        if driver_bbox is None and passenger_boxes is None:
+            droi, passenger_boxes, driver_is_person = self.select_rois(
+                detections, vehicle_bbox, frame_shape)
+        else:
+            droi = driver_bbox
+            passenger_boxes = passenger_boxes or []
+            if driver_is_person is None:
+                driver_is_person = True
 
         # ── 1) YOLO detections yolu (model bu sınıfları üretirse — fine-tune sonrası) ──
+        # RİSK YALNIZCA SÜRÜCÜ KUTUSU: ihlal yalnız sürücü kişinin kutusuna düşerse
+        # bayrak yakar. Yolcu kutusundaki telefon yalnız KAYIT (passenger_phone).
+        # Belirsiz (hiçbir kişiyle örtüşmeyen) telefon: yolcu varsa risk-dışı sayılır
+        # (sürücü-dışı hareket riski etkilemesin); kabinde tek kişi/kişi yoksa
+        # (yalnız sürücü ya da geometrik yedek) konservatif olarak sürücüye yazılır.
         if droi is not None:
             for d in detections:
                 in_driver = self._overlaps(droi, d.bbox)
-                in_passenger = proi is not None and self._overlaps(proi, d.bbox)
+                in_passenger = any(self._overlaps(pb, d.bbox) for pb in passenger_boxes)
 
                 if d.label == "phone":
                     if in_driver:
                         state.phone_use = True       # Sürücü telefon → tehlike
                     elif in_passenger:
                         state.passenger_phone = True # Yolcu telefon → kayıt ama tehlike değil
+                    elif not passenger_boxes:
+                        state.phone_use = True       # Tek sürücü / geometrik yedek → konservatif
                     else:
-                        state.phone_use = True       # Bölge belirsiz → konservatif: sürücü say
+                        state.passenger_phone = True # Yolcu varken belirsiz → risk-dışı
                 elif d.label == "cigarette":
                     if in_driver:
                         state.smoking = True
