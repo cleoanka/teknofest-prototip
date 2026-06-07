@@ -12,7 +12,7 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 
 **Genel:**
 - Prototip repo **temel alındı**; uzak `cleoanka/teknofest-prototip` ile senkron (K7 akışı).
-- YZ hattı **uçtan uca çalışıyor**: mock (**326 test yeşil**) **ve** gerçek GPU (MPS/CUDA + YOLOv8 + plaka modeli) doğrulandı.
+- YZ hattı **uçtan uca çalışıyor**: mock (**336 test yeşil**) **ve** gerçek GPU (MPS/CUDA + YOLOv8 + plaka modeli) doğrulandı.
 - Eğitim/veri hattı **kodlandı ve test edildi** (aşağıdaki modüller).
 
 **Hazır olan YZ modülleri:**
@@ -55,6 +55,14 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
   videolarda %17/%0); sigara FP'leri temizlendi (telefon-karışması + parlak-piksel CV yedeği kapatıldı →
   video_2/3 %0). Kulaklık: dış kamerada landmark ile görülemez → kapalı, fine-tune'a (Faz 8) bırakıldı.
   Eşikler `config/settings.py` (`driver_*`). Detay: §3 (2026-06-07).
+- **Faz 5b — Kişi-bazlı sürücü/yolcu ayrımı** ✓ (2026-06-07) — sürücü artık aracı statik **yarıya
+  bölerek** değil, kabindeki `person` tespitleri arasından **kameranın bakış açısına göre EN SAĞ-ALTTAKİ**
+  kişiyi seçerek belirleniyor (`select_rois`: `score = right_w·x2/W + bottom_w·y2/H`, en yüksek = sürücü).
+  Kalan kişiler **yolcu**. **Risk yalnızca sürücü kutusundaki** ihlallere (telefon/sigara/kulaklık) ve
+  yalnız sürücü crop'unda çalışan MediaPipe geometrisine bağlı → **yolcuların hareketleri risk-dışı**
+  (yolcu telefonu yalnız `passenger_phone` olarak kayda geçer). `person` yoksa eski **geometrik sağ-yarı**
+  yedeğine güvenli düşüş. Ayarlar: `driver_person_select`, `driver_select_{right,bottom}_weight`.
+  **9 yeni test** (`tests/test_driver_select.py`) — toplam **336 yeşil**.
 - **Faz 6 — Hız kalibrasyonu** → BEKLEYEN
 - **Faz 7 — QoD doğrulama (eval: Normal vs Kritik + bant verimliliği)** ✓ MİNİ (2026-06-06) — gerçek
   video üzerinde ~%43 bant tasarrufu (şartname %40 kriteri sağlandı, `eval/qod_video.py`).
