@@ -122,6 +122,21 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
   + **latch** (süregelen davranış kilidi) ile yapılır; algılama güveni **0.3**. *Neden:* dış kamerada
   sigara recall'u %4'tü; bu üç ayar ölçümle %32'ye çıkardı, FP üretmeden. Geometri yönteminin tavanı bu;
   dudakta-asılı sigara + daha yüksek recall için **fine-tune cigarette sınıfı** gerek (Faz 8).
+- **K-011 (2026-06-07):** Sigara recall ikinci tur — **ölçümle** darboğaz bulundu, körlemesine eşik
+  oynanmadı. Diagnostic: yüz+el olan karelerde göreli kapı (sigara/telefon ayrımı) **0 kare eliyor**
+  (suçsuz); asıl kayıp (a) FaceMesh yüzü seyrek yakalıyor, (b) `min_face_px` kapısı uygun kareleri
+  227→108 kırpıyor. İki düzeltme: **(1) yüz konum cache'i** (`driver_face_cache_frames=30`) — yüz
+  kaybolunca son ağız/kulak konumu kısa süre kullanılır, geometri kullanılabilirliği %55→%75;
+  **(2) `driver_min_face_px` 45→30** (grid taramasıyla doğrulandı). *Sonuç:* video_1 sigara
+  **%32→%59**; video_2/video_3 sigara **%0** (FP yok), telefon (13/61/0) ve yorgunluk hiç bozulmadı.
+  30 altı/eşik gevşetme ek fayda vermedi → kalan tavan **el algılama** (fine-tune, Faz 8).
+- **K-012 (2026-06-07):** Telefon FP düzeltmesi + **tespit kutuları**. (a) video_1'de %13 telefon FP
+  vardı (sigara içerken el yüze yakın). Ölçüm: gerçek telefonda el kulağa ÇOK yakın (video_2 d_ear
+  %99'u <0.40×fw), FP'de dağınık (video_1 %53). **`driver_phone_ear_ratio` 0.60→0.40** (sweep): video_1
+  telefon **%13→%0**, video_2 **%61 korundu**, sigara etkilenmedi. (b) `DriverState.phone_bbox` +
+  `cigarette_bbox` eklendi — tetikleyen elin TAM-KARE kutusu (ROI-px → büyütme geri al + ofset),
+  latch ile senkron yayınlanır. Görselleştirme + çıktı verisi için (ihlal el bölgesi; kesin nesne
+  kutusu değil, geometri türevi). Şema geriye-uyumlu (default None).
 
 ---
 
@@ -383,6 +398,25 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 - **Ölçülen (sentetik, §8.1):** `tests/test_plate_pnp.py` **13 test** — frontal derinlik %2,
   reproj <0.5px, yaw=30°→±3°; **kanıt:** 35° yaw'da naif genişlik %10+ yanılırken **PnP %3**.
   **308→326 yeşil**, regresyon yok. Commit `ef61609`. Detay/ölçüm: `gercek_hiz_progress.md`.
+
+### ✅ Tamamlanan (7 Haziran — sürücü davranışı: sigara recall 2. tur, %32 → %59)
+- **Yöntem:** önce **ölç, sonra düzelt** (körlemesine eşik yok). Diagnostic'ler (`_diag_*`, geçici)
+  ile darboğaz çıkarıldı: yüz+el karelerde **göreli kapı 0 kare eliyor** (sigara/telefon ayrımı suçsuz);
+  asıl kayıp seyrek yüz tespiti + `min_face_px` kapısının kareleri 227→108 kırpması.
+- **2 düzeltme:**
+  1. **Yüz konum cache'i** (`driver_face_cache_frames=30`): yüz kaybolunca son ağız/kulak konumu
+     (normalize) kısa süre kullanılır; kafa direksiyonda ~sabit. Geometri kullanılabilirliği %55→%75.
+  2. **`driver_min_face_px` 45→30** (grid taramasıyla doğrulandı; 30 altı/eşik gevşetme fayda vermedi).
+- **Ölçülen (3 dış video, 4K, CPU):** video_1 sigara **%32 → %59**; video_2/video_3 sigara **%0** (FP yok),
+  telefon (13/61/0) ve yorgunluk hiç bozulmadı. Mock 18 saf-mantık testi yeşil. Kalan tavan **el algılama**
+  → fine-tune cigarette sınıfı (Faz 8). Bkz. **K-011**.
+
+### ✅ Tamamlanan (7 Haziran — telefon FP düzeltmesi + tespit kutuları)
+- **Telefon FP:** video_1'de %13 yanlış telefon (sigara içerken el yüze yakın). Sweep ile
+  `driver_phone_ear_ratio` **0.60→0.40** → video_1 telefon **%13→%0**, video_2 **%61 korundu**, sigara değişmedi.
+- **Tespit kutuları:** `DriverState.phone_bbox` + `cigarette_bbox` (tetikleyen elin tam-kare kutusu,
+  latch ile senkron). İşaretli videolarda telefon=mavi, sigara=kırmızı kutu çizilir. Bkz. **K-012**.
+- **Nihai (3 dış video):** video_1 TEL %0 / SIG %59; video_2 TEL %61 / SIG %0; video_3 temiz. Mock 18 test yeşil.
 
 ### ⏭️ Sıradaki (öncelik sırası)
 0. **PnP §8.2 çapraz doğrulama:** `last_pose` PnP-hızı ↔ homografi hızı `methods_agree` ile

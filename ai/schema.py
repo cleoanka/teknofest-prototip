@@ -64,6 +64,10 @@ class DriverState(BaseModel):
     no_seatbelt: bool = False
     headphone: bool = False
     passenger_phone: bool = False    # Yolcu tarafında telefon (tehlike sayılmaz)
+    # Tetikleyen elin TAM-KARE kutusu (görselleştirme + çıktı verisi). Geometriden
+    # türetildiği için kesin nesne kutusu değil, "ihlalin gerçekleştiği el bölgesi".
+    phone_bbox: Optional[BBox] = None       # telefon: el kulakta bölgesi
+    cigarette_bbox: Optional[BBox] = None   # sigara: el ağızda bölgesi
 
 
 class Vehicle(BaseModel):
