@@ -23,7 +23,7 @@ from typing import Optional, Tuple
 import numpy as np
 
 from ai.schema import BBox
-from ai.tracking import Track
+from ai.tracking import Track, KalmanSpeed1D
 from ai.homography import GroundHomography
 
 
@@ -143,8 +143,8 @@ class MetricSpeedEstimator:
     def __init__(self, settings):
         self.s = settings
         self.scale = ScaleField(min_samples=getattr(settings, "calib_min_samples", 6))
-        # track_id -> EMA ile düzgünleştirilmiş hız (m/s); kareler arası jitter bastırma
-        self._ema: dict = {}
+        # track_id → KalmanSpeed1D; EMA'nın yerini aldı (titreme bastırma için)
+        self._kalman: dict = {}
         # Aşama 4 — şerit homografisi (kurulursa ppm(y)'ye göre ÖNCELİKLİ ölçek kaynağı)
         self.homography: Optional[GroundHomography] = None
 
@@ -254,16 +254,18 @@ class MetricSpeedEstimator:
         kept = [v for (dt, v) in steps if abs(v - med) <= accel * max(dt, 1e-3)]
         v_robust = float(np.median(kept)) if kept else med
 
-        # Track-başı EMA — kareler arası gürültüyü bastır
-        alpha = getattr(self.s, "speed_ema_alpha", 0.4)
-        prev = self._ema.get(track.track_id)
-        v_smooth = v_robust if prev is None else alpha * v_robust + (1.0 - alpha) * prev
-        self._ema[track.track_id] = v_smooth
+        # Kalman filtresi — EMA'nın yerini aldı; titreme daha iyi bastırılır
+        q = getattr(self.s, "speed_kalman_q", 3.0)
+        r = getattr(self.s, "speed_kalman_r", 8.0)
+        tid = track.track_id
+        if tid not in self._kalman:
+            self._kalman[tid] = KalmanSpeed1D(Q=q, R=r)
+        v_smooth = self._kalman[tid].update(v_robust)
 
         v_kmh = round(max(0.0, min(v_smooth * 3.6, self.s.speed_metric_max_kmh)), 1)
         return v_kmh, True
 
     def prune(self, active_ids) -> None:
-        """Tracker'da artık olmayan track'lerin EMA durumunu temizle (bellek)."""
-        for tid in [t for t in self._ema if t not in active_ids]:
-            del self._ema[tid]
+        """Tracker'da artık olmayan track'lerin Kalman durumunu temizle (bellek)."""
+        for tid in [t for t in self._kalman if t not in active_ids]:
+            del self._kalman[tid]

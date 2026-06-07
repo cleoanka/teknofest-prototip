@@ -48,7 +48,8 @@ class BaseDetector:
 # Gerçek YOLO dedektörü
 # ──────────────────────────────────────────────────────────────────────────────
 class YoloDetector(BaseDetector):
-    def __init__(self, model_normal: str, model_critical: str, device: str = "auto"):
+    def __init__(self, model_normal: str, model_critical: str,
+                 device: str = "auto", tracker: Optional[str] = "bytetrack.yaml"):
         from ultralytics import YOLO  # lazy import
         self._device = self._resolve_device(device)
         self._models = {
@@ -56,6 +57,8 @@ class YoloDetector(BaseDetector):
             "critical": YOLO(model_critical),
         }
         self._names = self._models["normal"].names
+        # "bytetrack.yaml" | "botsort.yaml" | None (→ predict, ID yok)
+        self._tracker = tracker
 
     @staticmethod
     def _resolve_device(device: str) -> str:
@@ -74,9 +77,16 @@ class YoloDetector(BaseDetector):
     def detect(self, frame: np.ndarray, conf: float, profile: str) -> List[Detection]:
         model = self._models["critical" if profile == "critical" else "normal"]
         s = get_settings()
-        res = model.predict(
-            frame, conf=conf, iou=s.iou_nms, device=self._device, verbose=False
-        )[0]
+        # ByteTrack / BoT-SORT aktifse model.track(), yoksa model.predict()
+        if self._tracker:
+            res = model.track(
+                frame, conf=conf, iou=s.iou_nms, device=self._device,
+                verbose=False, persist=True, tracker=self._tracker,
+            )[0]
+        else:
+            res = model.predict(
+                frame, conf=conf, iou=s.iou_nms, device=self._device, verbose=False
+            )[0]
         out: List[Detection] = []
         names = res.names if hasattr(res, "names") else self._names
         if res.boxes is None:
@@ -90,11 +100,19 @@ class YoloDetector(BaseDetector):
             canonical, vtype = mapped       # araç alt-tipi → ("vehicle", "car"/"minibus"/...)
             x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]
             attrs = {"vtype": vtype} if vtype else {}
+            # ByteTrack/BoT-SORT track ID'sini Detection'a göm (araçlar için)
+            bt_id: Optional[int] = None
+            if self._tracker and b.id is not None:
+                try:
+                    bt_id = int(b.id[0])
+                except Exception:
+                    pass
             out.append(Detection(
                 label=canonical,
                 confidence=float(b.conf[0]),
                 bbox=BBox(x1=x1, y1=y1, x2=x2, y2=y2),
                 attributes=attrs,
+                track_id=bt_id,
             ))
         return out
 
@@ -148,15 +166,25 @@ class MockDetector(BaseDetector):
         return dets
 
 
+_TRACKER_CFGS = {
+    "bytetrack": "bytetrack.yaml",
+    "botsort":   "botsort.yaml",
+    "iou":       None,   # built-in IOUTracker, ByteTrack devre dışı
+}
+
+
 def build_detector(settings=None) -> BaseDetector:
     settings = settings or get_settings()
     mode = resolve_mode(settings)
     if mode == "real":
         try:
+            tracker_key = getattr(settings, "tracker_type", "bytetrack")
+            tracker_cfg = _TRACKER_CFGS.get(tracker_key, "bytetrack.yaml")
             return YoloDetector(
                 settings.yolo_model_normal,
                 settings.yolo_model_critical,
                 settings.yolo_device,
+                tracker=tracker_cfg,
             )
         except Exception as e:  # model indirilemedi/torch yok -> mock'a düş
             os.environ.setdefault("AI_FALLBACK_REASON", str(e))

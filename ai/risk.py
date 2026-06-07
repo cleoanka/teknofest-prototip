@@ -21,7 +21,8 @@ def _level(score: int) -> str:
 
 
 def assess_risk(driver: DriverState, speed_kmh: Optional[float],
-                zigzag: bool = False) -> RiskAssessment:
+                zigzag: bool = False, vtype: Optional[str] = None,
+                harsh_braking: bool = False) -> RiskAssessment:
     s = get_settings()
     score = 0
     factors = []
@@ -36,10 +37,15 @@ def assess_risk(driver: DriverState, speed_kmh: Optional[float],
         score += RISK_WEIGHTS["no_seatbelt"]; factors.append("emniyet_kemeri_yok")
     if driver.headphone:
         score += RISK_WEIGHTS["headphone"]; factors.append("kulaklik")
-    if speed_kmh is not None and speed_kmh > s.speed_limit_kmh:
+    # Araç tipine göre dinamik limit (otomobil/otobüs/kamyon farklı sınırlara tabidir);
+    # haritada karşılığı yoksa genel speed_limit_kmh'a düşülür.
+    limit = s.speed_limit_by_vtype.get(vtype, s.speed_limit_kmh) if vtype else s.speed_limit_kmh
+    if speed_kmh is not None and speed_kmh > limit:
         score += RISK_WEIGHTS["overspeed"]; factors.append("hiz_asimi")
     if zigzag:
         score += RISK_WEIGHTS["zigzag"]; factors.append("zigzag")
+    if harsh_braking:
+        score += RISK_WEIGHTS["harsh_braking"]; factors.append("ani_fren")
 
     score = int(min(score, 100))
     return RiskAssessment(score=score, level=_level(score), factors=factors)

@@ -85,6 +85,7 @@ class Vehicle(BaseModel):
     driver_bbox: Optional[BBox] = None         # Sürücü tarafı ROI (mavi)
     passenger_bbox: Optional[BBox] = None      # Yolcu tarafı ROI (turuncu)
     swerving: bool = False                     # Zigzag/şerit ihlali
+    harsh_braking: bool = False                 # Ani fren (~1 sn'de büyük hız düşüşü) — olası kaza
 
 
 class RiskAssessment(BaseModel):

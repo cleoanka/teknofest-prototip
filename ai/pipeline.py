@@ -16,13 +16,14 @@ Blok F: Risk skoru
 from __future__ import annotations
 
 import time
+from collections import deque
 from typing import Optional, Tuple
 
 import numpy as np
 
 from ai.schema import FrameResult, Vehicle, Detection, BBox, PlateResult
 from ai.detector import build_detector, BaseDetector
-from ai.tracking import IOUTracker
+from ai.tracking import IOUTracker, KalmanSpeed1D
 from ai.plate_ocr import PlateReader
 from ai.lp_detector import get_lp_detector
 from ai.plate_crop import looks_like_plate, refine_to_frame, plate_sharpness, refine_with_corners
@@ -50,6 +51,25 @@ def _dominant_color(crop: np.ndarray) -> Optional[str]:
     if g >= r and g >= b:
         return "yesil"
     return "mavi"
+
+
+def _near_frame_edge(bbox: BBox, w: int, h: int, margin_pct: float) -> bool:
+    """Bbox kadrajın kenarına değiyor mu? (radar/ANPR "ölü bölge" mantığı)
+
+    Kenarlardaki ölçümler iki nedenle güvenilmezdir: (1) dedektör kutusu
+    kadraj sınırında kırpılır → alan/foot-point aniden sıçrar, (2) homografi
+    kalibrasyon bölgesinin (şerit/plaka noktaları) dışında ekstrapolasyon yapar.
+    Gerçek radar/ANPR kameraları da ölçümü merkez ROI'ye sıkıştırır — kenarda
+    yeni ölçüm almak yerine son geçerli değeri korur.
+
+    margin_pct, çözünürlükten bağımsız tutarlı bir "ölü bölge" oranı verir
+    (3840x2160'ta %1.5 ≈ 58x32px; 640x360'ta ≈ 10x5px).
+    """
+    if bbox is None or w <= 0 or h <= 0:
+        return False
+    mx, my = w * margin_pct, h * margin_pct
+    return (bbox.x1 < mx or bbox.y1 < my
+            or bbox.x2 > w - mx or bbox.y2 > h - my)
 
 
 def _vehicle_crop(
@@ -83,6 +103,14 @@ class Pipeline:
         self.lp_detector = get_lp_detector(mode=self.s.ai_mode)
         self.plate_tracker = PlateTracker(ttl_frames=self.s.plate_track_ttl_frames)
         self.speed_estimator = MetricSpeedEstimator(self.s)
+        # track_id → (speed_kmh, is_calibrated): kenardaki son geçerli hız "mührü"
+        # (radar/ANPR mantığı — bkz. _near_frame_edge)
+        self._last_speed: dict = {}
+        # track_id → KalmanSpeed1D: kalibrasyonsuz sezgisel (estimate_speed) yol için
+        # de titreme bastırma — metrik yol zaten MetricSpeedEstimator içinde Kalman kullanır
+        self._heuristic_kalman: dict = {}
+        # track_id → deque[(ts, speed_kmh)]: ani fren tespiti için kısa hız geçmişi penceresi
+        self._speed_hist: dict = {}
         self._last_t = time.time()
         self._frame_id = 0
 
@@ -181,6 +209,38 @@ class Pipeline:
         plate_origin = (fx1, fy1)
         return best_bbox, (crop if crop.size > 0 else None), best_conf, plate_origin
 
+    def _check_harsh_braking(self, track_id: Optional[int], speed_kmh: float, ts: float) -> bool:
+        """Ani fren / olası kaza: ~harsh_braking_window_s'lik pencerede hız düşüşü
+        oranı (km/h / s) eşiği aşarsa True (ör. 100→20 km/h, ~1 sn'de).
+
+        Kare-kare karşılaştırma yerine kısa bir geçmiş penceresi kullanılır —
+        Kalman'dan geçmiş hız bile ardışık karelerde küçük dalgalanır; tek-kare
+        Δv'si eşiği (saniyeye ölçeklenince) yanlışlıkla aşırdı. Pencere, gerçek
+        ~1 sn'lik yavaşlamayı kısa vadeli gürültüden ayırır.
+        """
+        if track_id is None:
+            return False
+        hist = self._speed_hist.setdefault(track_id, deque(maxlen=90))
+        window_s = max(0.1, getattr(self.s, "harsh_braking_window_s", 0.8))
+        threshold = getattr(self.s, "harsh_braking_decel_kmh_s", -50.0)
+
+        ref = None
+        for sample in hist:
+            if ts - sample[0] >= window_s:
+                ref = sample
+            else:
+                break
+
+        braking = False
+        if ref is not None:
+            t_old, v_old = ref
+            dts = ts - t_old
+            if dts > 0 and ((speed_kmh - v_old) / dts) <= threshold:
+                braking = True
+
+        hist.append((ts, speed_kmh))
+        return braking
+
     def process(self, frame: np.ndarray, critical: bool,
                 fps: float = 30.0,
                 frame_ts: Optional[float] = None) -> Tuple[FrameResult, TriggerContext]:
@@ -203,9 +263,14 @@ class Pipeline:
         detections = self.detector.detect(frame, conf=conf, profile=profile)
 
         # Blok B — araç takibi
+        # ByteTrack / BoT-SORT etkinse dedektör zaten track_id'leri doldurmuştur;
+        # bu ID'leri external_ids olarak geçiyoruz → IOUTracker Track geçmişini
+        # (foot_history, ts_history, …) aynı ID'lerle günceller.
+        # Mock mod veya tracker=iou ise tüm track_id'ler None → klasik IOU modu.
         veh_dets = [d for d in detections if d.label == "vehicle"]
         veh_boxes = [(d.bbox.x1, d.bbox.y1, d.bbox.x2, d.bbox.y2) for d in veh_dets]
-        track_ids = self.tracker.update(veh_boxes, ts=vts)
+        bt_ids = [d.track_id for d in veh_dets]  # ByteTrack'ten gelen ID'ler (None → IOU)
+        track_ids = self.tracker.update(veh_boxes, ts=vts, external_ids=bt_ids)
         for d, tid in zip(veh_dets, track_ids):
             d.track_id = tid
 
@@ -234,16 +299,38 @@ class Pipeline:
                 x2i, y2i = int(max(0, pv.bbox.x2)), int(max(0, pv.bbox.y2))
                 vehicle.color = _dominant_color(frame[y1i:y2i, x1i:x2i])
 
-            # Blok C — hız. Önce metrik (oto-kalibrasyon ısındıysa); yoksa eski
-            # kalibrasyonsuz sezgisel (is_calibrated=False). Ölçek-alanı önceki
-            # karelerin plaka/araç ölçümlerinden kurulur (warm-up, §4.3).
-            metric_kmh, calibrated = self.speed_estimator.estimate(primary_track)
-            if calibrated:
-                vehicle.speed_kmh = metric_kmh
-                vehicle.speed_is_calibrated = True
+            # Blok C — hız. Radar/ANPR mantığı: araç kadraj kenarına değiyorsa
+            # (kırpılma + homografi ekstrapolasyonu nedeniyle ölçüm güvenilmez)
+            # YENİDEN HESAPLAMA YAPMA — son geçerli ölçümü "mühürleyip" göster.
+            # Aksi halde: önce metrik (oto-kalibrasyon ısındıysa); yoksa eski
+            # kalibrasyonsuz sezgisel (is_calibrated=False).
+            if _near_frame_edge(vehicle.bbox, w, h, self.s.speed_edge_margin_pct):
+                cached = self._last_speed.get(vehicle.track_id)
+                if cached is not None:
+                    vehicle.speed_kmh, vehicle.speed_is_calibrated = cached
+                # cached yoksa (araç ilk kez kenarda görüldü) speed_kmh None kalır
             else:
-                vehicle.speed_kmh = estimate_speed(primary_track, w, h, fps, dt)
-                vehicle.speed_is_calibrated = False
+                metric_kmh, calibrated = self.speed_estimator.estimate(primary_track)
+                if calibrated:
+                    vehicle.speed_kmh = metric_kmh
+                    vehicle.speed_is_calibrated = True
+                else:
+                    raw_kmh = estimate_speed(primary_track, w, h, fps, dt)
+                    if raw_kmh is not None and vehicle.track_id is not None:
+                        # Metrik yol zaten Kalman kullanıyor (MetricSpeedEstimator);
+                        # kalibrasyonsuz sezgisel yol da aynı şekilde yumuşatılır —
+                        # aksi halde ısınma sırasında ekranda titreşen değerler görünür.
+                        kf = self._heuristic_kalman.setdefault(
+                            vehicle.track_id,
+                            KalmanSpeed1D(Q=self.s.speed_kalman_q, R=self.s.speed_kalman_r))
+                        vehicle.speed_kmh = round(kf.update(raw_kmh), 1)
+                    else:
+                        vehicle.speed_kmh = raw_kmh
+                    vehicle.speed_is_calibrated = False
+                if vehicle.speed_kmh is not None:
+                    self._last_speed[vehicle.track_id] = (vehicle.speed_kmh, vehicle.speed_is_calibrated)
+                    vehicle.harsh_braking = self._check_harsh_braking(
+                        vehicle.track_id, vehicle.speed_kmh, vts)
 
             # Swerving
             if primary_track:
@@ -356,15 +443,25 @@ class Pipeline:
         # metrik hızı için. Plaka: yüksek-kesinlik çapa; tüm araçlar: sınıf-bazlı
         # genişlikten düşük-ağırlıklı yedek (Aşama 2). Hız (Blok C) önceki karelerin
         # ölçeğini kullandığından sıralama güvenli.
-        if vehicle.plate_bbox is not None:
+        # Kenar filtresi BURADA da uygulanır: kırpılmış plaka/araç (foreshortening +
+        # eksik genişlik) ScaleField'i (ppm(y) eğrisi) kirletmesin (radar/ANPR mantığı).
+        if vehicle.plate_bbox is not None and not _near_frame_edge(
+                vehicle.plate_bbox, w, h, self.s.speed_edge_margin_pct):
             self.speed_estimator.observe_plate(vehicle.plate_bbox)
         for d in veh_dets:
-            self.speed_estimator.observe_vehicle(d.bbox, d.attributes.get("vtype"))
+            if not _near_frame_edge(d.bbox, w, h, self.s.speed_edge_margin_pct):
+                self.speed_estimator.observe_vehicle(d.bbox, d.attributes.get("vtype"))
         if vehicle.present:
             self.speed_estimator.maybe_fit()
-        # Silinen track'lerin hız-EMA durumunu temizle (bellek sızıntısı önleme)
+        # Silinen track'lerin hız-Kalman ve "son geçerli hız" durumunu temizle (bellek)
         alive_ids = set(self.tracker.tracks.keys())
         self.speed_estimator.prune(alive_ids)
+        for tid in [t for t in self._last_speed if t not in alive_ids]:
+            del self._last_speed[tid]
+        for tid in [t for t in self._heuristic_kalman if t not in alive_ids]:
+            del self._heuristic_kalman[tid]
+        for tid in [t for t in self._speed_hist if t not in alive_ids]:
+            del self._speed_hist[tid]
         # Sahneden çıkmış araçların plaka durumunu da temizle (ttl ile)
         self.plate_tracker.prune(alive_ids, self._frame_id)
 
@@ -388,7 +485,8 @@ class Pipeline:
         )
 
         # Blok F — risk skoru
-        result.risk = assess_risk(result.driver, vehicle.speed_kmh, vehicle.swerving)
+        result.risk = assess_risk(result.driver, vehicle.speed_kmh, vehicle.swerving,
+                                  vtype=vehicle.vtype, harsh_braking=vehicle.harsh_braking)
 
         result.latency_ms = round((time.time() - t0) * 1000, 1)
         result.fps = round(1.0 / dt, 1)
@@ -402,5 +500,6 @@ class Pipeline:
             plate_ocr_conf=vehicle.plate.confidence,
             ambiguous_object_confs=[d.confidence for d in detections
                                     if d.label in ("phone", "cigarette")],
+            harsh_braking=vehicle.harsh_braking,
         )
         return result, ctx

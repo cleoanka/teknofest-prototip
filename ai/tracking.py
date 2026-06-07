@@ -1,15 +1,45 @@
 """
-Hafif IOU tabanlı çoklu nesne takipçisi (ByteTrack-lite).
+Çoklu nesne takip altyapısı.
 
-Amaç: araçlara kalıcı track_id atamak ve bbox alan geçmişini tutmak
-(QoD tetik koşulu A — "yaklaşma/bbox büyümesi" ve hız tahmini için gerekli).
-Harici bağımlılık yok; gerçek sistemde ByteTrack ile değiştirilebilir.
+• Track       — tek araç geçmişi (foot_history, ts_history, …)
+• KalmanSpeed1D — kare-başı hız tahminindeki titremeyi bastıran 1-D Kalman
+• IOUTracker  — IOU tabanlı fallback (mock mod); external_ids parametresiyle
+                ByteTrack / BoT-SORT gibi harici izleyicilerin ID'lerini de kabul eder.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 from collections import deque
+
+
+class KalmanSpeed1D:
+    """1-D sabit-hız Kalman filtresi — kare-başı hız tahminindeki titremeyi bastırır.
+
+    Durum x (km/h). Q: süreç gürültüsü (araç hızının ne kadar değişebildiği).
+    R: ölçüm gürültüsü (anlık BEV hız tahmininin güvenilmezliği).
+    P=200 başlangıcı → filtre ilk ölçüme hızlı yakınsıyor, sonra Q/R dengesine
+    göre ne kadar güncelleneceğini belirliyor.
+    """
+    __slots__ = ("x", "P", "Q", "R", "_init")
+
+    def __init__(self, Q: float = 3.0, R: float = 8.0):
+        self.Q = Q
+        self.R = R
+        self.x = 0.0
+        self.P = 200.0
+        self._init = False
+
+    def update(self, z: float) -> float:
+        if not self._init:
+            self.x = z
+            self._init = True
+            return z
+        self.P += self.Q
+        K = self.P / (self.P + self.R)
+        self.x += K * (z - self.x)
+        self.P *= (1.0 - K)
+        return self.x
 
 
 def iou(a: Tuple[float, float, float, float], b: Tuple[float, float, float, float]) -> float:
@@ -126,12 +156,18 @@ class IOUTracker:
         self.tracks: Dict[int, Track] = {}
 
     def update(self, boxes: List[Tuple[float, float, float, float]],
-               ts: float | None = None) -> List[int]:
+               ts: float | None = None,
+               external_ids: Optional[List[Optional[int]]] = None) -> List[int]:
         """boxes -> her kutuya karşılık gelen track_id listesi (sırayı korur).
 
-        ts: bu karenin video-zaman çizgisi damgası (s, PTS/client_ts). Eşleşen
-        ve yeni track'lere yazılır; metrik hız Δt'si için kullanılır.
+        ts: bu karenin video-zaman çizgisi damgası (s, PTS/client_ts).
+        external_ids: ByteTrack / BoT-SORT gibi harici bir izleyiciden gelen
+            ID listesi (boxes ile aynı uzunlukta). None elemanlar IOU ile atanır.
+            Tüm liste None ise klasik IOU eşleştirme çalışır.
         """
+        if external_ids is not None and any(eid is not None for eid in external_ids):
+            return self._update_external(boxes, ts, external_ids)
+
         assigned: Dict[int, int] = {}      # box_index -> track_id
         used_tracks = set()
 
@@ -168,6 +204,44 @@ class IOUTracker:
                     del self.tracks[tid]
 
         return [assigned[bi] for bi in range(len(boxes))]
+
+    def _update_external(self, boxes: List[Tuple[float, float, float, float]],
+                         ts: float | None,
+                         external_ids: List[Optional[int]]) -> List[int]:
+        """ByteTrack / BoT-SORT ID'leriyle Track geçmişini günceller.
+
+        Harici izleyici IOU eşleştirmesini zaten yaptı; biz sadece Track nesnelerini
+        (foot_history, ts_history, …) koruyup hız/swerving hesabı için kullanırız.
+        ID çakışmasını önlemek için _next_id, en yüksek harici ID'nin üstüne güncellenir.
+        """
+        used_tracks: set = set()
+        result: List[int] = []
+
+        for bbox, eid in zip(boxes, external_ids):
+            if eid is None:
+                tid = self._next_id
+                self._next_id += 1
+            else:
+                tid = eid
+            if tid not in self.tracks:
+                t = Track(track_id=tid, bbox=bbox)
+                self.tracks[tid] = t
+            self.tracks[tid].update(bbox, ts=ts)
+            used_tracks.add(tid)
+            result.append(tid)
+
+        # _next_id'yi harici ID'lerin üstüne çek (çakışma önleme)
+        if used_tracks:
+            self._next_id = max(self._next_id, max(used_tracks) + 1)
+
+        # Görülmeyen track'leri yaşlandır / sil
+        for tid in list(self.tracks.keys()):
+            if tid not in used_tracks:
+                self.tracks[tid].misses += 1
+                if self.tracks[tid].misses > self.max_misses:
+                    del self.tracks[tid]
+
+        return result
 
     def get(self, track_id: int) -> Track | None:
         return self.tracks.get(track_id)
