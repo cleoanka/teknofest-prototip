@@ -123,12 +123,20 @@ class Settings(BaseSettings):
     # çıkarılır: el kulağa yakınsa telefon, parmak ağıza yakınsa sigara.
     # Mesafeler YÜZ GENİŞLİĞİNE oranlanır → ölçek-bağımsız (yakın/uzak yüz fark etmez).
     driver_mp_hands: bool = Field(default=True)            # MediaPipe Hands aç/kapa
-    driver_hand_conf: float = Field(default=0.4)           # Hands min algılama güveni
+    # Algılama güvenleri DÜŞÜK tutulur: dış kamerada sürücü karanlık/uzak/profil →
+    # yüksek eşik yüzü/eli hiç bulamıyordu (recall darboğazı). Düşürmek recall'ı artırır.
+    driver_hand_conf: float = Field(default=0.3)           # Hands min algılama/takip güveni
+    driver_face_conf: float = Field(default=0.3)           # FaceMesh min algılama/takip güveni
     driver_phone_ear_ratio: float = Field(default=0.60)    # el-kulak < 0.60×yüz_gen → telefon adayı
     driver_smoke_mouth_ratio: float = Field(default=0.45)  # parmak-ağız < 0.45×yüz_gen → sigara adayı
     driver_state_window: int = Field(default=15)           # sürdürme/tekrar penceresi (kare) ~0.5sn@30fps
     driver_phone_sustain: int = Field(default=5)           # pencerede ≥N kare el-kulakta → phone_use teyit
     driver_smoke_sustain: int = Field(default=5)           # pencerede ≥N kare parmak-ağızda → smoking teyit
+    # Latch (süregelen davranış kilidi): telefon/sigara bir kez TEYİT edilince bayrağı
+    # bu kadar kare basılı tut. Sürücü uzaklaşıp birkaç karede el/yüz kaybolsa da
+    # davranış sürdüğünden bayrak düşmez → tutarlı çıktı. Sustain teyidi şart olduğundan
+    # tek-kare FP latch'lenmez (gürültüye karşı güvenli). ~0.9 sn @50fps. 0 = kapalı.
+    driver_latch_frames: int = Field(default=45)
     # Kulaklık: saf landmark kulaklığı GÖREMEZ (ele bağlı değil). Düşük-güvenli
     # "el sabit kulakta ama telefon teyidi yok" sezgisi opsiyonel; varsayılan KAPALI
     # (Adım 6 / fine-tune yol haritası madde 7'ye bırakıldı).

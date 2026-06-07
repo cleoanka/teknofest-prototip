@@ -72,18 +72,20 @@ class DriverMonitor:
         self._phone_hist = deque(maxlen=win)
         self._smoke_hist = deque(maxlen=win)
         self._headphone_hist = deque(maxlen=win)
+        self._latch = {}   # {'phone': kalan_kare, 'smoke': ...} — süregelen davranış kilidi
         if self.mode == "real":
             try:
                 import mediapipe as mp
                 self._mesh = mp.solutions.face_mesh.FaceMesh(
                     static_image_mode=False, max_num_faces=2, refine_landmarks=True,
-                    min_detection_confidence=0.4,
+                    min_detection_confidence=self.s.driver_face_conf,
+                    min_tracking_confidence=self.s.driver_face_conf,
                 )
                 if self.s.driver_mp_hands:
                     self._hands = mp.solutions.hands.Hands(
                         static_image_mode=False, max_num_hands=2,
                         min_detection_confidence=self.s.driver_hand_conf,
-                        min_tracking_confidence=0.4,
+                        min_tracking_confidence=self.s.driver_hand_conf,
                     )
             except Exception:
                 self.mode = "mock"
@@ -244,23 +246,19 @@ class DriverMonitor:
 
         phone_cand = smoke_cand = hand_at_ear = False
         for hand in hands_px:
-            # Telefon: elin herhangi noktası kulağa yakın mı?
             d_ear = min(_dist(pt, e) for pt in hand for e in ears)
-            at_ear = d_ear < phone_thr
-            if at_ear:
-                phone_cand = True
+            tips = [hand[i] for i in _FINGERTIPS if i < len(hand)]
+            d_mouth = min((_dist(t, mouth) for t in tips), default=9e9)
+            # AYRIM = parmak ucu AĞIZA mı yoksa KULAĞA mı daha yakın? (göreli yakınlık)
+            # NEDEN: yüz profilde/küçükken kulak↔ağız birbirine yakındır; mutlak
+            # "kulakta mı" testi sigarayı (el ağızda) telefon sanıp bastırıyordu.
+            # Göreli kıyas video_1 (sigara) ile video_2 (telefon) ayrımını net yapar
+            # (ölçüm: R_rel → video_1 %13 yakalar, video_2'de telefon sigaraya karışmaz).
+            if d_mouth < smoke_thr and d_mouth <= d_ear:
+                smoke_cand = True            # parmak ağızda (kulaktan yakın) → sigara
+            elif d_ear < phone_thr and d_ear < d_mouth:
+                phone_cand = True            # el kulakta (ağızdan yakın) → telefon
                 hand_at_ear = True
-            # Sigara: parmak ucu ağıza yakın mı? AMA telefon-kulakta değilken.
-            # NEDEN: yüz küçükken kulak↔ağız yakın; telefonu kulağa götüren el
-            # ağıza da "yakın" görünür → sigara yanlış pozitifi. Bunu önlemek için
-            # (1) bu elin kulakta olmaması ve (2) parmağın ağıza, kulaktan DAHA
-            # yakın olması şartı aranır (parmak gerçekten ağızda).
-            if not at_ear:
-                tips = [hand[i] for i in _FINGERTIPS if i < len(hand)]
-                if tips:
-                    d_mouth = min(_dist(t, mouth) for t in tips)
-                    if d_mouth < smoke_thr and d_mouth < d_ear:
-                        smoke_cand = True
         return phone_cand, smoke_cand, hand_at_ear
 
     def _detect_smoking_brightpixel(self, roi_gray: np.ndarray, face_lm, rh: int, rw: int) -> bool:
@@ -337,6 +335,25 @@ class DriverMonitor:
     def _overlaps(a: BBox, b: BBox) -> bool:
         return not (a.x2 < b.x1 or a.x1 > b.x2 or a.y2 < b.y1 or a.y1 > b.y2)
 
+    def _latch_flag(self, key: str, active: bool) -> bool:
+        """
+        Süregelen davranış kilidi: bayrak bu kare TEYİT edildiyse latch'i tazele;
+        teyit yoksa kalan kare sayısınca bayrağı basılı tut, sonra bırak.
+        Sürücü kısa süre kaybolsa/landmark kaçsa da (uzak/karanlık) davranış sürdüğü
+        için bayrak titremez. Teyit zaten sustain gerektirdiğinden tek-kare FP latch'lenmez.
+        """
+        n = self.s.driver_latch_frames
+        if n <= 0:
+            return active
+        if active:
+            self._latch[key] = n
+            return True
+        rem = self._latch.get(key, 0)
+        if rem > 0:
+            self._latch[key] = rem - 1
+            return True
+        return False
+
     def assess(self, frame: np.ndarray, detections: List[Detection], profile: str,
                vehicle_bbox: Optional[BBox] = None) -> DriverState:
         state = DriverState()
@@ -404,5 +421,9 @@ class DriverMonitor:
                 # Mock: yorgunluk sentetik; telefon mock detector'dan detections yoluyla gelir
                 ear, perclos, fatigue = self._fatigue_mock(frame)
                 state.ear, state.perclos, state.fatigue = ear, perclos, fatigue
+
+        # Latch — telefon/sigara süregelen davranış: teyit sonrası bayrağı basılı tut
+        state.phone_use = self._latch_flag("phone", state.phone_use)
+        state.smoking = self._latch_flag("smoke", state.smoking)
 
         return state
