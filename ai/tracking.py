@@ -70,10 +70,11 @@ class Track:
     center_history: deque = field(default_factory=lambda: deque(maxlen=12))
     # Yer-temas noktası (bbox alt-orta piksel) geçmişi — aracın yere değdiği nokta.
     # Metrik hız ppm(y)/homografi yer düzlemi hesabı bu noktayı kullanır (§7.2).
-    foot_history: deque = field(default_factory=lambda: deque(maxlen=12))
+    # maxlen=16 (>12): §12 derinliğe-uyarlı pencere uzaktaki araçta uzun baz isteyebilir.
+    foot_history: deque = field(default_factory=lambda: deque(maxlen=16))
     # Her güncellemenin VİDEO ZAMAN ÇİZGİSİ damgası (s) — PTS/client_ts; yoksa None.
-    # area/center/foot_history ile paralel; metrik hız için "gerçek Δt" buradan gelir.
-    ts_history: deque = field(default_factory=lambda: deque(maxlen=12))
+    # foot_history ile PARALEL (aynı maxlen); metrik hız için "gerçek Δt" buradan gelir.
+    ts_history: deque = field(default_factory=lambda: deque(maxlen=16))
     misses: int = 0
     hits: int = 1
 

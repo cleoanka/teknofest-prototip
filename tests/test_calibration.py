@@ -1,4 +1,6 @@
 """Metrik hız oto-kalibrasyonu testleri (Aşama 1-4: ppm, füzyon, pencere, homografi)."""
+import math
+
 import numpy as np
 
 from ai.schema import BBox
@@ -6,7 +8,21 @@ from ai.tracking import Track
 from ai.calibration import plate_ppm, ScaleField, MetricSpeedEstimator
 from ai.homography import GroundHomography
 from ai.lane_detect import detect_lane_homography
+from ai.plate_pnp import default_focal_px, _plate_model_pts
 from config.settings import get_settings
+
+
+def _project_plate(focal, pp, center3d, yaw_deg=0.0):
+    """Plaka 4 köşesini verilen kamera-uzayı merkezinden (X,Y,Z) görüntüye izdüşür."""
+    cx, cy = pp
+    m3 = np.column_stack([_plate_model_pts(0.520, 0.112), np.zeros(4)])
+    cyw, syw = math.cos(math.radians(yaw_deg)), math.sin(math.radians(yaw_deg))
+    R = np.array([[cyw, 0, syw], [0, 1, 0], [-syw, 0, cyw]])
+    cam = (R @ m3.T).T + np.asarray(center3d, float)
+    uv = np.empty((4, 2))
+    uv[:, 0] = focal * cam[:, 0] / cam[:, 2] + cx
+    uv[:, 1] = focal * cam[:, 1] / cam[:, 2] + cy
+    return uv
 
 
 # ── plate_ppm ────────────────────────────────────────────────────────────────
@@ -283,5 +299,130 @@ def test_homography_scale_conflict_guard():
 def test_lane_detect_graceful_on_bad_input():
     # cv2 yoksa ya da girdi yetersizse çökmeden None (K4)
     assert detect_lane_homography(None) is None
+
+
+# ── §12-P2 — PnP derinlik-zaman (dZ/dt) boyuna hız füzyonu ───────────────────
+
+def test_depth_fusion_fixes_longitudinal_undershoot():
+    """§12-P2 — kameraya doğru (boyuna) hareket: PnP dZ/dt gerçek hızı verir;
+    ppm(y)-yer-değiştirme yolu perspektif sıkışmasından AĞIR undershoot eder."""
+    s = get_settings()
+    f, pp = default_focal_px(1280, s.camera_hfov_deg), (640.0, 360.0)
+    v_mps, dt, n = 20.0, 0.1, 8                  # 72 km/h boyuna, merkezli şerit
+
+    def run(depth_on):
+        ss = s.model_copy(update={"speed_depth_fusion_enabled": depth_on})
+        est = MetricSpeedEstimator(ss)          # homografi YOK → ScaleField yolu
+        tr = Track(track_id=1, bbox=(0, 0, 1, 1))
+        for k in range(n):
+            Z = 8.0 + v_mps * k * dt
+            uv = _project_plate(f, pp, (0.0, 1.0, Z))
+            xs, ys = uv[:, 0], uv[:, 1]
+            cx, by = float((xs.min() + xs.max()) / 2), float(ys.max())
+            tr.update((cx - 50, by - 20, cx + 50, by), ts=k * dt)
+            est.observe_plate_pose([list(c) for c in uv], 1280, 720, track_id=1, ts=k * dt)
+        est.maybe_fit()
+        return est.estimate(tr)
+
+    kmh_depth, ok_d = run(True)
+    kmh_ppm, ok_p = run(False)
+    assert ok_d and kmh_depth is not None
+    assert ok_p and kmh_ppm is not None
+    assert abs(kmh_depth - 72.0) < 9.0          # derinlik füzyonu ~doğru (±%12)
+    assert kmh_ppm < 0.7 * kmh_depth            # ppm-only boyuna harekette undershoot
+
+
+def test_depth_fusion_inactive_without_z_history():
+    """§12-P2 — PnP pozu hiç gelmemişse derinlik-füzyonu None → eski ppm(y) yolu
+    (geriye uyum: mevcut testler etkilenmez)."""
+    est = _estimator_with_ppm(100.0)            # yalnız ppm; Z geçmişi yok
+    t = _track_from_path([(x, 360) for x in (0, 50, 100, 150)], [0.0, 0.1, 0.2, 0.3])
+    assert est._depth_fused_speed_mps(t) is None
+    kmh, calib = est.estimate(t)
+    assert calib and kmh is not None            # eski yolla yine hız üretir
+
+
+# ── §12-P4 — homografi boyuna ölçeği ↔ PnP derinlik çapraz-kontrolü ──────────
+
+def test_homography_longitudinal_conflict_via_pnp_depth():
+    """§12-P4 — homografi boyuna hızı PnP derinlik hızının ~2 katıysa çakışma
+    (yanlış dash_pitch); eşitse çakışma yok. PnP dZ/dt focal/dash_pitch'ten
+    BAĞIMSIZ boyuna referanstır (izotropik ppm-çakışma geçidinin kaçırdığı vaka)."""
+    i2g, g2i = _i2g(), _g2i()
+    est = MetricSpeedEstimator(get_settings())
+    est.set_homography(i2g)
+    v_mps, dt, n = 20.0, 0.1, 8
+    tr = Track(track_id=1, bbox=(0, 0, 1, 1))
+    for k in range(n):
+        x, y = g2i.to_ground(1.75, 4.0 + v_mps * k * dt)
+        tr.update((x - 50, y - 10, x + 50, y), ts=k * dt)
+    # homografi hızı ≈ 20 m/s (kendi sahnesi); PnP radyal de 20 → çakışma YOK
+    est._pnp_z_hist[1] = [(0.0, 4.0), (0.7, 18.0)]      # 14/0.7 = 20 m/s
+    assert est._homography_longitudinal_conflict(tr) is False
+    # PnP radyal 10 m/s → homografi 2× → çakışma VAR (homografiyi bırak)
+    est._pnp_z_hist[1] = [(0.0, 4.0), (0.7, 11.0)]      # 7/0.7 = 10 m/s
+    assert est._homography_longitudinal_conflict(tr) is True
+
+
+# ── §12-P5 — kaynaklar-arası ölçek güveni (scale_confidence) ─────────────────
+
+def test_scale_confidence_none_with_single_source():
+    """§12-P5 — tek kaynak varsa çapraz-kontrol yapılamaz → None (sahte güven yok)."""
+    sf = ScaleField(min_samples=4)
+    for y in (300, 340, 380, 420):
+        sf.add(y, 100.0, source="plate")
+    sf.fit()
+    assert sf.source_agreement() is None
+
+
+def test_scale_confidence_high_when_sources_agree():
+    """§12-P5 — pnp ve vehicle kaynakları aynı ppm(y)'de buluşuyorsa güven yüksek."""
+    sf = ScaleField(min_samples=6)
+    for y in (300, 340, 380, 420):
+        sf.add(y, 100.0, source="pnp")
+    for y in (310, 350, 390, 430):
+        sf.add(y, 100.0, source="vehicle")
+    sf.fit()
+    c = sf.source_agreement()
+    assert c is not None and c > 0.8
+
+
+def test_scale_confidence_low_when_sources_disagree():
+    """§12-P5 — vehicle kaynağı pnp'den sistematik (~%50) sapıyorsa güven düşük."""
+    sf = ScaleField(min_samples=6)
+    for y in (300, 340, 380, 420):
+        sf.add(y, 100.0, source="pnp")
+    for y in (310, 350, 390, 430):
+        sf.add(y, 150.0, source="vehicle")     # %50 yanlı kaynak
+    sf.fit()
+    c_bad = sf.source_agreement()
+    assert c_bad is not None and c_bad < 0.6
+
+
+def test_estimator_exposes_scale_confidence_after_fit():
+    """§12-P5 — maybe_fit sonrası estimator.last_scale_confidence dolu (≥2 kaynak)."""
+    est = MetricSpeedEstimator(get_settings())
+    for y in (300, 340, 380, 420):
+        est.scale.add(y, 100.0, source="pnp")
+        est.scale.add(y + 5, 100.0, source="vehicle")
+    est.maybe_fit()
+    assert est.last_scale_confidence is not None and est.last_scale_confidence > 0.8
+
+
+# ── §12 quick-win — zaman-boşluğu (ByteTrack re-ID/drop) baz-çizgisini böler ──
+
+def test_speed_baseline_splits_on_time_gap():
+    """ts_history'de büyük Δt boşluğu varsa baz-çizgisi boşluğu KÖPRÜLEMEZ; yalnız
+    en uzun kesintisiz (boşluksuz) koşunun uçtan-uca hızı alınır."""
+    est = _estimator_with_ppm(100.0)
+    # 4 temiz kare @0.1s (5 m/s), sonra 1 s BOŞLUK, sonra 3 hızlı kare (10 m/s)
+    pts = [(0, 360), (50, 360), (100, 360), (150, 360),
+           (800, 360), (900, 360), (1000, 360)]
+    ts = [0.0, 0.1, 0.2, 0.3, 1.3, 1.4, 1.5]
+    t = _track_from_path(pts, ts)
+    v = est._robust_speed_mps(t, use_homography=False)
+    assert v is not None
+    # Boşluk köprülenseydi endpoint(0..6)= ~6.7 m/s; boşluk-öncesi temiz koşu = 5 m/s
+    assert abs(v - 5.0) < 1.0
     assert detect_lane_homography(np.zeros((20, 20, 3), dtype=np.uint8)) is None
     assert detect_lane_homography(np.zeros((200, 200, 3), dtype=np.uint8)) is None

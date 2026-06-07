@@ -24,6 +24,8 @@ import numpy as np
 from ai.tracking import Track
 from ai.homography import GroundHomography
 from ai.calibration import MetricSpeedEstimator
+from ai.plate_pnp import default_focal_px, _plate_model_pts
+from ai.schema import BBox
 from config.settings import get_settings
 
 # Sabit sentetik sahne: görüntü trapezi ↔ yer dikdörtgeni (şerit 3.5 m, adım 12 m)
@@ -81,6 +83,93 @@ def _seed_scale_field(est: MetricSpeedEstimator, g2i: GroundHomography,
             if px_w > 1:
                 est.scale.add(foot[1], px_w / w_m, weight=0.5)
     est.scale.fit()
+
+
+# ── §12-P3 — BAĞIMSIZ-GT (analitik pinhole) — döngüselliği kır ───────────────
+# speed_eval'in §8.1 kolu izi GroundHomography'den üretip aynı H ile çözer (MAE~0
+# kaçınılmaz, yalnız cebir). Burada GT'yi tamamen bağımsız bir analitik PINHOLE
+# kameradan (K[R|t]) üretir, sistemi YALNIZ sahne gözlemlerinden (plaka PnP / araç
+# genişliği) oto-kalibre ettirip uçtan-uca km/h MAE ölçeriz → ilk DÜRÜST doğruluk.
+
+_PP = (640.0, 360.0)          # asal nokta (1280×720 görüntü merkezi)
+_FRAME_W, _FRAME_H = 1280, 720
+
+
+def project_plate_pinhole(focal: float, center3d, yaw_deg: float = 0.0,
+                          pp: Tuple[float, float] = _PP) -> np.ndarray:
+    """Plaka 4 köşesini analitik pinhole ile (focal, kamera-uzayı merkezi) görüntüye
+    izdüşür. GroundHomography KULLANMAZ → çözücüden bağımsız ground-truth (döngüsel değil)."""
+    cx, cy = pp
+    m3 = np.column_stack([_plate_model_pts(0.520, 0.112), np.zeros(4)])
+    cyw, syw = np.cos(np.radians(yaw_deg)), np.sin(np.radians(yaw_deg))
+    R = np.array([[cyw, 0, syw], [0, 1, 0], [-syw, 0, cyw]])
+    cam = (R @ m3.T).T + np.asarray(center3d, float)
+    uv = np.empty((4, 2))
+    uv[:, 0] = focal * cam[:, 0] / cam[:, 2] + cx
+    uv[:, 1] = focal * cam[:, 1] / cam[:, 2] + cy
+    return uv
+
+
+def run_independent_gt_eval(speeds_kmh: Sequence[float] = (36, 72, 108),
+                            fps: float = 20.0, n: int = 8,
+                            hfov_gt_deg: float = 55.0) -> Dict:
+    """Analitik pinhole-GT ile uçtan-uca oto-kalibrasyon doğruluğu (boyuna hareket).
+
+    İki kol (farklı hata kaynakları — KARIŞTIRMA):
+      A — PnP+derinlik: plaka köşeleri f_gt ile üretilir, estimator HFOV varsayar
+          (camera_focal_px=None). observe_plate_pose→maybe_fit→estimate. dZ/dt boyuna
+          undershoot'u giderir; hfov_gt=varsayım iken MAE ~0 (oto-kalibrasyon doğru).
+      B — Yalnız araç-genişliği (ppm): PnP yok → ppm(y) yer-değiştirme yolu. Boyuna
+          harekette perspektif sıkışmasından undershoot → MAE büyük (döngüsel evalin
+          GİZLEDİĞİ gerçek model-uyumsuzluğu)."""
+    s = get_settings()
+    f_assumed = default_focal_px(_FRAME_W, getattr(s, "camera_hfov_deg", 55.0))
+    f_gt = default_focal_px(_FRAME_W, hfov_gt_deg)
+    dt = 1.0 / fps
+    z0 = 30.0                                  # uzaktan yaklaşan araç (boyuna)
+
+    true_l, est_pnp, est_width = [], [], []
+    for v in speeds_kmh:
+        v_mps = v / 3.6
+        # — Kol A: PnP + derinlik füzyonu —
+        est_a = MetricSpeedEstimator(s.model_copy(update={"camera_focal_px": None}))
+        ta = Track(track_id=1, bbox=(0, 0, 1, 1))
+        for k in range(n):
+            Z = z0 - v_mps * k * dt            # yaklaşıyor (Z azalır)
+            uv = project_plate_pinhole(f_gt, (0.0, 1.0, Z))
+            by = float(uv[:, 1].max()); cx = float((uv[:, 0].min() + uv[:, 0].max()) / 2)
+            ta.update((cx - 60, by - 24, cx + 60, by), ts=k * dt)
+            est_a.observe_plate_pose([list(c) for c in uv], _FRAME_W, _FRAME_H,
+                                     track_id=1, ts=k * dt)
+        est_a.maybe_fit()
+        kmh_a, ok_a = est_a.estimate(ta)
+        # — Kol B: yalnız araç genişliği (ppm yolu) —
+        est_b = MetricSpeedEstimator(s.model_copy(update={"camera_focal_px": None}))
+        tb = Track(track_id=1, bbox=(0, 0, 1, 1))
+        veh_w_m = 1.80
+        for k in range(n):
+            Z = z0 - v_mps * k * dt
+            half_px = f_gt * (veh_w_m / 2.0) / Z
+            by = _PP[1] + f_gt * 1.2 / Z       # araç altı (yere yakın) görüntü-y
+            cx = _PP[0]
+            bbox = BBox(x1=cx - half_px, y1=by - 2 * half_px, x2=cx + half_px, y2=by)
+            tb.update((bbox.x1, bbox.y1, bbox.x2, bbox.y2), ts=k * dt)
+            est_b.observe_vehicle(bbox, "car")
+        est_b.maybe_fit()
+        kmh_b, ok_b = est_b.estimate(tb)
+
+        true_l.append(float(v))
+        est_pnp.append(kmh_a if (ok_a and kmh_a is not None) else float("nan"))
+        est_width.append(kmh_b if (ok_b and kmh_b is not None) else float("nan"))
+
+    mae_pnp, mape_pnp = mae_mape(true_l, est_pnp)
+    mae_width, mape_width = mae_mape(true_l, est_width)
+    return {
+        "speeds": true_l, "fps": fps, "hfov_gt_deg": hfov_gt_deg,
+        "est_pnp_depth": est_pnp, "est_width_only": est_width,
+        "mae_pnp_depth": mae_pnp, "mape_pnp_depth": mape_pnp,
+        "mae_width_only": mae_width, "mape_width_only": mape_width,
+    }
 
 
 def mae_mape(true: Sequence[float], est: Sequence[float]) -> Tuple[float, float]:
@@ -198,6 +287,20 @@ def format_report(r: Dict) -> str:
         f"recall={r['overspeed_homography']['recall']:.2f}  "
         f"accuracy={r['overspeed_homography']['accuracy']:.2f}",
     ]
+    ig = r.get("independent_gt")
+    if ig:
+        lines += [
+            "",
+            "§12-P3 BAĞIMSIZ-GT (analitik pinhole, döngüsel DEĞİL) — boyuna hareket:",
+            f"  Gerçek (km/h)        : {[round(x,1) for x in ig['speeds']]}",
+            f"  PnP + derinlik (dZ/dt): {[round(x,1) for x in ig['est_pnp_depth']]}"
+            f"   MAE = {ig['mae_pnp_depth']:.2f}  MAPE = {ig['mape_pnp_depth']:.1f}%",
+            f"  Yalnız araç-genişliği : {[round(x,1) for x in ig['est_width_only']]}"
+            f"   MAE = {ig['mae_width_only']:.2f}  MAPE = {ig['mape_width_only']:.1f}%",
+            "  → PnP+derinlik bağımsız-GT'de ~0 MAE (oto-kalibrasyon DOĞRU); yalnız-ppm yolu",
+            "    boyuna harekette AĞIR undershoot eder (döngüsel evalin gizlediği model-uyumsuzluğu).",
+            "    (HFOV varsayımı doğruyken; HFOV yanlışsa dZ/dt focal-oranı kadar kayar — bkz. noise_probe §E.)",
+        ]
     return "\n".join(lines)
 
 
@@ -208,6 +311,7 @@ def main() -> None:
     except Exception:
         pass
     r = run_eval()
+    r["independent_gt"] = run_independent_gt_eval()      # §12-P3
     report = format_report(r)
     print(report)
     out = os.path.join(os.path.dirname(__file__), "speed_eval.log")

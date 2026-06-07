@@ -20,9 +20,14 @@ from __future__ import annotations
 import numpy as np
 
 from ai.tracking import Track
-from ai.calibration import MetricSpeedEstimator
+from ai.calibration import MetricSpeedEstimator, plate_ppm
+from ai.plate_pnp import estimate_plate_pose, default_focal_px
+from ai.schema import BBox
 from config.settings import get_settings
-from eval.speed_eval import make_scene, _seed_scale_field, mae_mape, _IMG
+from eval.speed_eval import (
+    make_scene, _seed_scale_field, mae_mape, _IMG,
+    run_independent_gt_eval, project_plate_pinhole, _PP, _FRAME_W,
+)
 
 # Sahne görüntü köşeleri (yer dikdörtgeni ile eşlenir): near-sol, near-sağ, far-sol, far-sağ
 _IMG_PTS = [_IMG["left_near"], _IMG["right_near"], _IMG["left_far"], _IMG["right_far"]]
@@ -154,6 +159,53 @@ def run_mitigation_sweep(sigma=2.0, windows=(3, 5, 8), trials=60,
     return rows
 
 
+def run_focal_bias(hfovs=(45.0, 50.0, 55.0, 60.0, 65.0)):
+    """§12-P6 — derinlik-füzyonu (dZ/dt) FOCAL duyarlılığı: ppm=focal/Z'de Z∝f
+    olduğundan dZ/dt focal-oranı kadar yanlıdır (ppm YOLUNUN aksine — o focal-robust
+    ama boyuna undershoot eder). GT'yi gerçek HFOV'den üret, estimator 55° varsaysın
+    (camera_focal_px=None), bias'ı ölç. Beklenen: HFOV ±10° → hız ∓~%10."""
+    rows = []
+    for hfov in hfovs:
+        r = run_independent_gt_eval(speeds_kmh=(72.0,), hfov_gt_deg=hfov)
+        est = r["est_pnp_depth"][0]
+        rows.append((hfov, est, r["mape_pnp_depth"]))
+    return rows
+
+
+def run_pnp_recovery(yaws=(0.0, 30.0, 50.0, 60.0), sigma=0.5, trials=80, Z=8.0):
+    """§12-P6 §D — açılı plakada PnP KURTARMA oranı: naif plate_ppm() aspect geçidi
+    (tolerans 0.35 → ancak yaw≳50°'de) eğik plakayı DÜŞÜRÜR; PnP açıyı çözüp kurtarır.
+    Köşelere Gauss piksel-jitter'ı (σ) ekleyerek (üretimden bağımsız bozulma → döngüselliği
+    kır) her yaw'da: (1) plate_ppm kabul oranı, (2) PnP kabul oranı, (3) PnP ppm bağıl hatası.
+
+    DİKKAT: per-sample PnP ppm hatası küçük/uzak plakada gürültüye DUYARLIDIR (Z=8m, ~17px
+    plakada σ=0.5px → ~%20). Düzlemsel PnP'nin küçük-baz derinlik belirsizliği. Bu yüzden
+    PnP'nin değeri per-frame KESİNLİK değil, (a) açılı plakayı KURTARMA + (b) ScaleField'in
+    aykırı-dayanıklı çok-örnekli regresyonunu beslemektir (tekil gürültü orada bastırılır)."""
+    f = default_focal_px(_FRAME_W, 55.0)
+    ppm_true = f / Z
+    rows = []
+    for yaw in yaws:
+        naive_ok = pnp_ok = 0
+        pnp_errs = []
+        for _ in range(trials):
+            uv = project_plate_pinhole(f, (0.0, 0.0, Z), yaw_deg=yaw)
+            uv = uv + _RNG.normal(0, sigma, uv.shape)
+            # naif plate_ppm: eksen-hizalı bbox + aspect geçidi
+            xs, ys = uv[:, 0], uv[:, 1]
+            bbox = BBox(x1=float(xs.min()), y1=float(ys.min()),
+                        x2=float(xs.max()), y2=float(ys.max()))
+            if plate_ppm(bbox) is not None:
+                naive_ok += 1
+            pose = estimate_plate_pose([list(c) for c in uv], f, _PP)
+            if pose is not None:
+                pnp_ok += 1
+                pnp_errs.append(abs(pose.ppm - ppm_true) / ppm_true)
+        med_err = float(np.median(pnp_errs)) * 100 if pnp_errs else float("nan")
+        rows.append((yaw, naive_ok / trials, pnp_ok / trials, med_err))
+    return rows
+
+
 def main():
     import sys
     try:
@@ -181,7 +233,23 @@ def main():
     for W, cur, lb in run_mitigation_sweep():
         print(f"  {W:>8} | {cur:>11.2f} | {lb:>13.2f}")
     print("  → iki sütun ÖRTÜŞÜYOR: estimate() artık uçtan-uca uzun-baz çizgisi kullanıyor")
-    print("    (eski kare-kare medyan W=8'de ~4.2 idi → yeni ~2.4, ~%40 düşük).")
+    print("    (eski kare-kare medyan W=8'de ~4.2 idi → yeni ~2.4, ~%40 düşük).\n")
+
+    print("§D Açılı plaka PnP KURTARMA (§12-P6) — naif plate_ppm vs düzlemsel PnP:")
+    print(f"  {'yaw(°)':>6} | {'plate_ppm kabul':>15} | {'PnP kabul':>10} | {'PnP ppm hata%':>13}")
+    for yaw, naive_r, pnp_r, err in run_pnp_recovery():
+        print(f"  {yaw:>6.0f} | {naive_r:>15.0%} | {pnp_r:>10.0%} | {err:>13.1f}")
+    print("  → yaw≳50°'de naif plate_ppm foreshortened plakayı REDDEDER; PnP %100 kurtarır.")
+    print("    Per-sample ppm hatası ~%20 (küçük plaka + jitter); ScaleField aykırı-dayanıklı")
+    print("    çok-örnekli regresyonu bunu bastırır — PnP'nin değeri kesinlik değil KURTARMA.\n")
+
+    print("§E Derinlik-füzyonu FOCAL duyarlılığı (§12-P6) — ppm=focal/Z'de Z∝f:")
+    print(f"  {'HFOV_gt(°)':>10} | {'tahmin(72 gerçek)':>17} | {'MAPE(%)':>8}  (estimator 55° varsayar)")
+    for hfov, est, mape in run_focal_bias():
+        print(f"  {hfov:>10.0f} | {est:>17.1f} | {mape:>8.1f}")
+    print("  → dZ/dt boyuna undershoot'u GİDERİR ama focal-oranı kadar yanlıdır (HFOV ±10°→∓~%10).")
+    print("    ppm YOLU focal-robust ama boyuna undershoot eder; mutlak çapa: ppm→plaka 520mm, dZ/dt→focal.")
+    print("    Net: derinlik füzyonu undershoot'tan (~%95) çok daha iyi; focal'ı VP'den kalibre etmek artık daha değerli.")
 
 
 if __name__ == "__main__":

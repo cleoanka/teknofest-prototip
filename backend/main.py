@@ -1037,12 +1037,15 @@ async def list_test_videos(request: Request):
 # WebSocket
 # ──────────────────────────────────────────────────────────────────────────────
 
-async def _process_frame(frame: np.ndarray, client_ts: Optional[float]) -> dict:
+async def _process_frame(frame: np.ndarray, client_ts: Optional[float],
+                         frame_index: Optional[int] = None) -> dict:
     server_recv_ts = time.time()
-    # Aşama 0 — hız Δt'si için istemci yakalama zamanını (video-zaman çizgisi) geçir;
-    # yoksa pipeline wall-clock'a düşer.
+    # Aşama 0 / §12-P1 — hız Δt'si için istemci yakalama zamanını (video-zaman çizgisi)
+    # geçir; yoksa monotonik kare sayacından (frame_index/fps) türet (ağ jitter'ından
+    # bağımsız); o da yoksa pipeline wall-clock'a düşer.
     result, ctx = state.pipeline.process(
-        frame, critical=state.qod.is_critical, frame_ts=client_ts)
+        frame, critical=state.qod.is_critical,
+        frame_ts=client_ts, frame_index=frame_index)
     qod_status = state.qod.step(ctx, dt_s=state.settings.qod_eval_period_ms / 1000.0)
 
     if qod_status.mode == "CRITICAL" and result.mode == "NORMAL":
@@ -1087,6 +1090,7 @@ async def ws_ingest(ws: WebSocket, token: Optional[str] = None):
         return
     await ws.accept()
     ws_active_connections.labels(endpoint="ingest").inc()
+    frame_index = 0   # §12-P1: bağlantı başına monotonik kare sayacı (client_ts yoksa Δt için)
     try:
         while True:
             msg = await ws.receive()
@@ -1115,7 +1119,8 @@ async def ws_ingest(ws: WebSocket, token: Optional[str] = None):
                 await ws.send_json({"error": "frame decode failed"})
                 continue
 
-            payload = await _process_frame(frame, client_ts)
+            payload = await _process_frame(frame, client_ts, frame_index=frame_index)
+            frame_index += 1
             await ws.send_json(payload)
     except WebSocketDisconnect:
         pass

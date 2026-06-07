@@ -80,6 +80,9 @@ class Vehicle(BaseModel):
     # Hız gerçek metrik km/h mi (oto-kalibrasyon kuruldu) yoksa kalibrasyonsuz
     # göreceli sezgisel mi? (gercek_hiz_plani.md §7.4 — raporlamada karışmasın)
     speed_is_calibrated: bool = False
+    # §12-P5 — ölçek-alanı KAYNAKLAR-ARASI uyum güveni (0..1) ya da None (çapraz-kontrol
+    # yok). is_calibrated'ı EZMEZ: metrik hız her zaman raporlanır, güven ayrı taşınır.
+    scale_confidence: Optional[float] = None
     bbox: Optional[BBox] = None
     plate_bbox: Optional[BBox] = None          # Plaka kutusu — bounding rect (sarı)
     plate_pixel_width: Optional[float] = None  # px genişlik — mesafe kalibrasyonu (52cm / px_w)
