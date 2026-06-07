@@ -300,43 +300,7 @@ curl -X POST http://localhost:8000/api/test-video \
 
 ## API Özeti
 
-| Uç Nokta | Yöntem | Açıklama |
-|----------|--------|---------|
-| `/api/health` | GET | Sistem sağlık kontrolü |
-| `/api/health/deep` | GET | Derin sağlık kontrolü (DB, pipeline, WS) |
-| `/api/ping` | GET | Canlılık testi |
-| `/api/version` | GET | Versiyon bilgisi |
-| `/api/system/info` | GET | Süreç, bellek, uptime istatistikleri |
-| `/api/events` | GET | Riskli olay listesi (filtreli, sayfalı) |
-| `/api/events/summary` | GET | Olay özet istatistikleri |
-| `/api/events/export` | GET | CSV dışa aktarım (plaka/seviye filtreli) |
-| `/api/events/heatmap` | GET | Zaman bazlı yoğunluk haritası |
-| `/api/events/{id}` | GET | Tek olay detayı |
-| `/api/events/{id}` | DELETE | Tek olay sil |
-| `/api/statistics` | GET | Son N saatin istatistikleri |
-| `/api/vehicles` | GET | Plaka bazlı araç özeti |
-| `/api/vehicles/{plate}` | GET | Plakaya göre olay geçmişi |
-| `/api/vehicles/{plate}/timeline` | GET | Araç zaman çizelgesi |
-| `/api/qod/status` | GET | Bant genişliği durumu + verimlilik |
-| `/api/qod/proof` | GET | QoD tetik kanıtı raporu |
-| `/api/settings` | GET | Çalışma zamanı ayarları |
-| `/api/settings` | PATCH | Ayar güncelleme (AI_MODE vb.) |
-| `/api/test-video` | POST | Video dosyası YZ'den geçir |
-| `/api/test-video/files` | GET | Mevcut test videoları listele |
-| `/api/clear` | POST | Olay veritabanını temizle |
-| `/api/demo-token` | POST | Geliştirme JWT token'ı |
-| `/.well-known/jwks.json` | GET | RS256 public key (JWKS) |
-| `/camara/number-verification:verify` | POST | Sessiz SIM doğrulama → RS256 JWT |
-| `/camara/qod/sessions` | GET | Aktif QoD oturumları |
-| `/camara/qod/sessions` | POST | QoD oturumu aç (20 Mbps) |
-| `/camara/qod/sessions/{id}` | GET | Oturum detayı |
-| `/camara/qod/sessions/{id}` | DELETE | QoD oturumunu kapat |
-| `/metrics` | GET | Prometheus metrikleri |
-| `/ws/ingest` | WS | Kare gönder → sonuç al |
-| `/ws/detections` | WS | Salt-okuma abone soketi |
-| `/ws/status` | WS | Sistem durum soketi |
-
-> Tüm `/api/*` ve `/camara/*` uç noktaları: **100 req/dak** rate limit · `Authorization: Bearer <JWT>` opsiyonel.
+Tam API referansı: [`backend/README.md`](backend/README.md)
 
 Swagger UI: [`http://localhost:8000/docs`](http://localhost:8000/docs)
 
