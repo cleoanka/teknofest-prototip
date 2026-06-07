@@ -118,6 +118,10 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
   o sürümde eski `mp.solutions` API'si (FaceMesh/Hands) kaldırılmış, mevcut `driver_state` çalışmıyor.
   Bu makinede venv'e **`mediapipe==0.10.21`** (+ `numpy<2`, `opencv-contrib-python==4.10`) kuruldu.
   *Yapılacak:* takımla requirements pin'i `0.10.21`'e güncelle (ya da kodu yeni Tasks API'sine taşı).
+- **K-010 (2026-06-07):** Sigara/telefon ayrımı **göreli yakınlık** (parmak ağıza mı kulağa mı yakın)
+  + **latch** (süregelen davranış kilidi) ile yapılır; algılama güveni **0.3**. *Neden:* dış kamerada
+  sigara recall'u %4'tü; bu üç ayar ölçümle %32'ye çıkardı, FP üretmeden. Geometri yönteminin tavanı bu;
+  dudakta-asılı sigara + daha yüksek recall için **fine-tune cigarette sınıfı** gerek (Faz 8).
 
 ---
 
@@ -340,6 +344,22 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
   araç yakın/net olmalı. **Kulaklık** dış kameradan MediaPipe ile görülemez → fine-tune'a bırakıldı (Faz 8).
 - **Ortam notu:** Bu makinede GPU yok (CPU torch); FPS GPU'da çok daha yüksek olur. `mediapipe` uyumsuzluğu
   için bkz. **K-009** (requirements pin düzeltilmeli).
+
+### ✅ Tamamlanan (7 Haziran — sürücü davranışı: sigara recall iyileştirmesi)
+- **Sorun:** video_1'de sürücü baştan sona sigara içiyor (bir el direksiyonda, bir el ağızda)
+  ama tespit %4'te kalıyordu. Tanı (`yüz+el aynı anda` %26, parmak-ağız<0.45 olan 56 kare
+  vardı ama kural 13'e kırpıyordu).
+- **3 düzeltme (ölçümle seçildi):**
+  1. **Sigara kuralı R_rel:** mutlak "kulakta mı" gate'i yerine **göreli yakınlık** — parmak ucu
+     ağıza, kulaktan daha yakınsa sigara; kulağa daha yakınsa telefon. *Neden:* profil/küçük yüzde
+     kulak↔ağız yakındır, mutlak test sigarayı telefon sanıp bastırıyordu. (video_1 13→56 kare)
+  2. **Algılama güveni 0.4→0.3** (FaceMesh + Hands): karanlık/uzak/profil sürücüde recall darboğazı.
+     Yüz tespiti video_1 %27→%55 (2×), FP artışı yok.
+  3. **Latch** (`driver_latch_frames=45`): telefon/sigara süregelen davranış → teyit sonrası bayrak
+     ~0.9 sn basılı kalır; kısa kayıplarda titremez. Sustain teyidi şart olduğundan tek-kare FP latch'lenmez.
+- **Ölçülen (3 dış video, 4K, CPU):** video_1 sigara **%4 → %32 (8×)**; video_2 telefon %51→%61 korundu,
+  sigara %0; video_3 sigara %0 (temiz). Mock 18 saf-mantık testi yeşil. video_1'de telefon %13 (profil
+  karışması, kabul edildi — sigara sinyali baskın). Bkz. **K-010**.
 
 ### ⏭️ Sıradaki (öncelik sırası)
 1. **cigarette/seatbelt/headphone verisi:** Roboflow/manuel → bu 3 sürücü-davranışı sınıfını da kapat (`merge_yolo` ile kat).
