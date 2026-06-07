@@ -116,6 +116,40 @@ class Settings(BaseSettings):
     conf_critical: float = Field(default=0.25)
     iou_nms: float = Field(default=0.45)
 
+    # ── Sürücü davranışı — MediaPipe el-yüz geometrisi (ai/driver_state.py) ──
+    # NEDEN: COCO sigara/kulaklık sınıfını bilmez, telefonu da araç-içi küçük
+    # nesne olarak güvenilmez yakalar. Bu yüzden telefon/sigara/kulaklık,
+    # MediaPipe Hands (el landmark'ı) + FaceMesh (kulak/ağız) GEOMETRİSİNDEN
+    # çıkarılır: el kulağa yakınsa telefon, parmak ağıza yakınsa sigara.
+    # Mesafeler YÜZ GENİŞLİĞİNE oranlanır → ölçek-bağımsız (yakın/uzak yüz fark etmez).
+    driver_mp_hands: bool = Field(default=True)            # MediaPipe Hands aç/kapa
+    driver_hand_conf: float = Field(default=0.4)           # Hands min algılama güveni
+    driver_phone_ear_ratio: float = Field(default=0.60)    # el-kulak < 0.60×yüz_gen → telefon adayı
+    driver_smoke_mouth_ratio: float = Field(default=0.45)  # parmak-ağız < 0.45×yüz_gen → sigara adayı
+    driver_state_window: int = Field(default=15)           # sürdürme/tekrar penceresi (kare) ~0.5sn@30fps
+    driver_phone_sustain: int = Field(default=5)           # pencerede ≥N kare el-kulakta → phone_use teyit
+    driver_smoke_sustain: int = Field(default=5)           # pencerede ≥N kare parmak-ağızda → smoking teyit
+    # Kulaklık: saf landmark kulaklığı GÖREMEZ (ele bağlı değil). Düşük-güvenli
+    # "el sabit kulakta ama telefon teyidi yok" sezgisi opsiyonel; varsayılan KAPALI
+    # (Adım 6 / fine-tune yol haritası madde 7'ye bırakıldı).
+    driver_headphone_enable: bool = Field(default=False)
+    # Sürücü ROI ön-işleme — dış sabit kamerada sürücü UZAK + KARANLIK olur
+    # (kapalı otopark senaryosu). MediaPipe küçük/loş yüzü göremez; ROI kırpıldıktan
+    # sonra hedef boya BÜYÜTÜLÜR ve gamma+CLAHE ile PARLATILIR. Mesafe eşikleri
+    # yüz-genişliği ORANI olduğundan büyütme oranları bozmaz (ölçek-bağımsız).
+    driver_roi_min_px: int = Field(default=320)        # ROI kısa kenarı bu px'e büyütülür
+    driver_roi_max_upscale: float = Field(default=4.0) # aşırı büyütme/bulanıklık sınırı
+    driver_roi_brighten: bool = Field(default=True)    # düşük ışık: gamma + CLAHE
+    driver_roi_gamma: float = Field(default=1.8)       # >1 gölgeleri açar
+    # NATIVE (büyütme öncesi) yüz genişliği bu px'in altındaysa araç UZAK/yüz KÜÇÜK
+    # demektir → el-parmak landmark'ları gürültülü → telefon/sigara geometrisi BASTIRILIR
+    # (uzak mesafe yanlış pozitifini önler). Tek videoya özel değil, genel ilke.
+    driver_min_face_px: int = Field(default=45)
+    # Parlak-piksel CV sigara yedeği: ağız üstü ince parlak nesne arar. Gerçek
+    # footage'ta (ön cam yansıması, far, kontrast) yanlış pozitifi yüksek →
+    # varsayılan KAPALI. Asıl sigara sinyali el-parmak↔ağız geometrisi.
+    driver_smoke_brightpixel: bool = Field(default=False)
+
     # QoD tetik motoru (500 ms ihtiyaç-bazlı değerlendirme döngüsü)
     qod_eval_period_ms: int = Field(default=500)
     qod_bbox_growth_threshold: float = Field(default=0.18)   # A: yaklaşma
