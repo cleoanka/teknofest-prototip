@@ -293,6 +293,16 @@ class Settings(BaseSettings):
     speed_kalman_r: float = Field(default=8.0)              # Kalman ölçüm gürültüsü (BEV hız belirsizliği)
     speed_scale_check_factor: float = Field(default=1.8)    # homografi↔plaka ölçek ayrışma eşiği (Problem 2: yol-tipi çapraz-kontrolü)
     speed_metric_max_kmh: float = Field(default=200.0)      # akıl sağlığı üst sınırı
+    # §12-P2 — PnP derinlik-zaman (dZ/dt) boyuna hız füzyonu (homografi yokken)
+    speed_depth_fusion_enabled: bool = Field(default=True)  # plaka PnP derinliğinden boyuna hız
+    speed_pnp_z_min_samples: int = Field(default=2)         # dZ/dt için min PnP poz örneği
+    speed_pnp_z_min_dt_s: float = Field(default=0.2)        # dZ/dt baz-çizgisi için min süre
+    pnp_z_hist_len: int = Field(default=12)                 # track başına Z geçmişi uzunluğu
+    # §12-P4 — homografi boyuna ölçeğini (dash_pitch) PnP derinlik hızıyla çapraz-kontrol
+    speed_pnp_conflict_floor_mps: float = Field(default=2.0)  # bu hızın altında boyuna referans güvenilmez (~7 km/h)
+    # §12 quick-win — zaman sürekliliği + derinliğe-uyarlı pencere
+    speed_max_gap_s: float = Field(default=0.5)             # bu Δt'yi aşan adım baz-çizgisini böler (ByteTrack re-ID/drop)
+    speed_min_baseline_m: float = Field(default=0.5)        # uzaktaki araçta pencereyi bu metrik baza dek büyüt (0=kapalı)
     # Radar/ANPR mantığı: araç kadraj kenarına değdiğinde (kırpılma + homografi
     # ekstrapolasyonu nedeniyle ölçüm güvenilmez) o kare için hız hesaplanmaz;
     # son geçerli ölçüm "mühürlenip" gösterilmeye devam eder. Oran tabanlı —

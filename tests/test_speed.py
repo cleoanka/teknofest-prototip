@@ -1,5 +1,6 @@
 from ai.tracking import Track, IOUTracker
 from ai.speed import estimate_speed
+from ai.pipeline import _video_timestamp
 
 
 def test_speed_none_for_empty_track():
@@ -60,6 +61,28 @@ def test_speed_scales_with_track_video_timeline_dt():
     sp_slow = estimate_speed(slow, 640, 360, 30, 0.033)
     assert sp_fast is not None and sp_slow is not None
     assert abs(sp_fast - 2 * sp_slow) < 0.5   # yarı süre → iki kat hız
+
+
+def test_video_timestamp_prefers_client_ts():
+    """§12-P1: client_ts (yakalama damgası) verildiyse onu kullan."""
+    assert _video_timestamp(123.5, 7, 30.0, 999.0) == 123.5
+
+
+def test_video_timestamp_falls_back_to_frame_index_over_wallclock():
+    """§12-P1: damga yoksa Δt ağ-jitter'dan bağımsız olsun diye frame_index/fps
+    kullanılır; sunucu wall-clock'a DÜŞÜLMEZ."""
+    # frame_ts None → frame_index/fps = 30/10 = 3.0 (wall_ts 999.0 DEĞİL)
+    assert _video_timestamp(None, 30, 10.0, 999.0) == 3.0
+    # ardışık kareler tek-tipli Δt = 1/fps verir
+    t0 = _video_timestamp(None, 30, 10.0, 999.0)
+    t1 = _video_timestamp(None, 31, 10.0, 999.0)
+    assert abs((t1 - t0) - 0.1) < 1e-9
+
+
+def test_video_timestamp_wallclock_last_resort():
+    """§12-P1: ne damga ne sayaç varsa wall-clock son çare."""
+    assert _video_timestamp(None, None, 30.0, 555.0) == 555.0
+    assert _video_timestamp(0.0, None, 0.0, 555.0) == 555.0   # fps=0 + ts geçersiz
 
 
 def test_tracker_assigns_stable_ids():

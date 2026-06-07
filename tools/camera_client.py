@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import base64
 import json
+import time
 
 import cv2
 import numpy as np
@@ -56,7 +57,8 @@ async def run(source, url, fps, show):
             small = cv2.resize(frame, (640, int(640 * frame.shape[0] / frame.shape[1])))
             ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 60])
             data_url = "data:image/jpeg;base64," + base64.b64encode(buf).decode()
-            await ws.send(json.dumps({"frame": data_url}))
+            # §12-P1: yakalama anı damgası — hız Δt'si ağ jitter'ından bağımsız olsun
+            await ws.send(json.dumps({"frame": data_url, "client_ts": time.time()}))
             resp = json.loads(await ws.recv())
             if "error" not in resp:
                 v = resp["vehicle"]

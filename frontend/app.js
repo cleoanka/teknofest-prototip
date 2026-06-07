@@ -108,7 +108,11 @@ function pump() {
     captureCanvas.width = w; captureCanvas.height = h;
     const c = captureCanvas.getContext("2d");
     c.drawImage(video, 0, 0, w, h);
-    ws.send(JSON.stringify({ frame: captureCanvas.toDataURL("image/jpeg", 0.6) }));
+    // §12-P1: yakalama anı damgası (s) — hız Δt'si ağ varış jitter'ından etkilenmesin
+    ws.send(JSON.stringify({
+      frame: captureCanvas.toDataURL("image/jpeg", 0.6),
+      client_ts: Date.now() / 1000,
+    }));
   }
   setTimeout(() => requestAnimationFrame(pump), 1000 / SEND_FPS);
 }

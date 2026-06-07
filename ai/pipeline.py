@@ -82,6 +82,27 @@ def _near_frame_edge(bbox: BBox, w: int, h: int, margin_pct: float) -> bool:
             or bbox.x2 > w - mx or bbox.y2 > h - my)
 
 
+def _video_timestamp(frame_ts: Optional[float], frame_index: Optional[int],
+                     fps: float, wall_ts: float) -> float:
+    """Hız Δt'si için kullanılacak VİDEO-ZAMAN ÇİZGİSİ damgası (§12-P1).
+
+    Öncelik:
+      1. frame_ts (PTS / istemci YAKALAMA zamanı client_ts) — gönderildiyse en doğrusu;
+         ağ varış jitter'ından bağımsızdır (kare yakalanırken damgalanır).
+      2. frame_index / fps — istemci damga göndermiyorsa monotonik kare sayacından
+         türetilen TEK-TİPLİ Δt; ağ jitter'ı/kuyruk/GC duraklamasından bağımsız.
+      3. wall_ts (sunucu wall-clock) — son çare; canlı akışta ağ jitter'ı Δt'ye sızar.
+
+    Eski davranış (yalnız 1→3) ağ jitter'ını doğrudan v=Δs/Δt'ye taşıyordu; (2) bunu
+    kapatır. Saf aritmetik — test edilebilir, yan etkisiz.
+    """
+    if frame_ts is not None and frame_ts > 0:
+        return float(frame_ts)
+    if frame_index is not None and frame_index >= 0 and fps > 0:
+        return float(frame_index) / float(fps)
+    return float(wall_ts)
+
+
 def _vehicle_crop(
     frame: np.ndarray,
     vehicle_bbox: BBox,
@@ -253,17 +274,21 @@ class Pipeline:
 
     def process(self, frame: np.ndarray, critical: bool,
                 fps: float = 30.0,
-                frame_ts: Optional[float] = None) -> Tuple[FrameResult, TriggerContext]:
+                frame_ts: Optional[float] = None,
+                frame_index: Optional[int] = None) -> Tuple[FrameResult, TriggerContext]:
         """frame_ts: bu karenin VİDEO ZAMAN ÇİZGİSİ damgası (s) — video PTS ya da
         canlı akışta istemci yakalama zamanı (client_ts). Verilirse track'lere
-        yazılır ve metrik hız Δt'si bundan ölçülür (Aşama 0). Yoksa wall-clock'a
-        düşülür (canlı akışta kareler gerçek zamanlı geldiği için makul yaklaşım).
+        yazılır ve metrik hız Δt'si bundan ölçülür (Aşama 0).
+
+        frame_index: damga yoksa monotonik kare sayacı (§12-P1). frame_ts None ise
+        Δt, ağ jitter'ından bağımsız olsun diye `frame_index/fps`'ten türetilir;
+        o da yoksa wall-clock'a düşülür.
         """
         t0 = time.time()
         dt = max(1e-3, t0 - self._last_t)   # işleme (perf) Δt'si — fps/latency raporu için
         self._last_t = t0
-        # Hız için video-zaman çizgisi damgası: PTS/client_ts varsa onu, yoksa wall-clock'u kullan
-        vts = frame_ts if (frame_ts is not None and frame_ts > 0) else t0
+        # Hız için video-zaman çizgisi damgası (§12-P1): PTS/client_ts → frame_index/fps → wall-clock
+        vts = _video_timestamp(frame_ts, frame_index, fps, t0)
         self._frame_id += 1
         profile = "critical" if critical else "normal"
         conf = self.s.conf_critical if critical else self.s.conf_normal
@@ -328,6 +353,8 @@ class Pipeline:
                 if calibrated:
                     vehicle.speed_kmh = metric_kmh
                     vehicle.speed_is_calibrated = True
+                    # §12-P5 — kaynaklar-arası ölçek güveni (is_calibrated'ı ezmez, additif)
+                    vehicle.scale_confidence = self.speed_estimator.last_scale_confidence
                 else:
                     raw_kmh = estimate_speed(primary_track, w, h, fps, dt)
                     if raw_kmh is not None and vehicle.track_id is not None:
@@ -343,8 +370,11 @@ class Pipeline:
                     vehicle.speed_is_calibrated = False
                 if vehicle.speed_kmh is not None:
                     self._last_speed[vehicle.track_id] = (vehicle.speed_kmh, vehicle.speed_is_calibrated)
-                    vehicle.harsh_braking = self._check_harsh_braking(
-                        vehicle.track_id, vehicle.speed_kmh, vts)
+                    # §12 quick-win — ani fren YALNIZ kalibre (metrik km/h) hızda anlamlı;
+                    # ısınmadaki kalibrasyonsuz sezgisel hız yanlış Kritik-mod tetikler.
+                    if vehicle.speed_is_calibrated:
+                        vehicle.harsh_braking = self._check_harsh_braking(
+                            vehicle.track_id, vehicle.speed_kmh, vts)
 
             # Swerving
             if primary_track:
@@ -473,7 +503,8 @@ class Pipeline:
             # ppm (focal/Z). Pose çıkmazsa (köşe yok / geometri tutarsız) bbox-genişliği
             # tabanlı plate_ppm'e düş. Çift sayım olmasın diye yalnız biri çalışır.
             used_pose = self.speed_estimator.observe_plate_pose(
-                vehicle.plate_corners, w, h)
+                vehicle.plate_corners, w, h,
+                track_id=vehicle.track_id, ts=vts)   # §12-P2: Z-geçmişi için track_id+ts
             if not used_pose:
                 self.speed_estimator.observe_plate(vehicle.plate_bbox)
         for d in veh_dets:
