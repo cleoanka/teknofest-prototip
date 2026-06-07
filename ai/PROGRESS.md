@@ -47,7 +47,14 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
   `lp_detector` (morsetechlab YOLO11n oto-indirme), pipeline Blok D yeniden yazıldı. Gerçek MPS'de
   video_1/2 üzerinde `34TC8532` doğru ve kararlı. **308 test yeşil** (15 yeni eklendi). R7 kapandı.
 - **Faz 4b — Plaka OCR kalitesi (EasyOCR Katman 3 + PaddleOCR fallback)** → BEKLEYEN (video_3 iyileştirmesi)
-- **Faz 5 — Sürücü davranışı (telefon gerçek + yorgunluk denemesi)** → BEKLEYEN
+- **Faz 5 — Sürücü davranışı (telefon/sigara MediaPipe geometrisi)** ✓ (2026-06-07) — `driver_state`'e
+  MediaPipe **Hands** eklendi; telefon (el↔kulak) ve sigara (parmak↔ağız) **el-yüz geometrisinden**
+  çıkarılıyor (COCO bu sınıfları bilmiyor). FaceMesh kare başına **tek** işleniyor (yorgunluk+telefon+sigara
+  paylaşır). Sürücü ROI **büyüt+parlat** ön-işlemesi (dış kamerada uzak/karanlık sürücü). **3 dış test
+  videosunda** ölçüm (4K, **CPU**, ~11 FPS): telefon **ayırt edici** (sürücü telefondayken %51, diğer
+  videolarda %17/%0); sigara FP'leri temizlendi (telefon-karışması + parlak-piksel CV yedeği kapatıldı →
+  video_2/3 %0). Kulaklık: dış kamerada landmark ile görülemez → kapalı, fine-tune'a (Faz 8) bırakıldı.
+  Eşikler `config/settings.py` (`driver_*`). Detay: §3 (2026-06-07).
 - **Faz 6 — Hız kalibrasyonu** → BEKLEYEN
 - **Faz 7 — QoD doğrulama (eval: Normal vs Kritik + bant verimliliği)** ✓ MİNİ (2026-06-06) — gerçek
   video üzerinde ~%43 bant tasarrufu (şartname %40 kriteri sağlandı, `eval/qod_video.py`).
@@ -100,6 +107,17 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
   dahil) → `git push`. Commit mesajı Türkçe ve `<alan>: <ne> (neden)` biçiminde. Model ağırlığı/video/
   `.venv`/sır commit'lenmez (`.gitignore`). *Neden:* her adım izlenebilir/geri alınabilir olsun, takım
   GitHub üzerinden senkron kalsın. Detay kural: `AGENTS.md` **K7**.
+- **K-008 (2026-06-07):** Sürücü **telefon/sigara/kulaklık** tespiti **MediaPipe el-yüz geometrisi** ile
+  yapılacak (Hands + FaceMesh), YOLO sınıfı ile değil. *Neden:* COCO sigara/kulaklık bilmez, telefonu da
+  güvenilmez yakalar. El↔kulak = telefon, parmak↔ağız = sigara. **Kulaklık:** dış kamerada landmark ile
+  görülemez (ele bağlı değil) → varsayılan KAPALI, fine-tune'a (Faz 8) bırakıldı. **FP düzeltmeleri:**
+  (1) el kulaktaysa telefon say, sigara sayma (yüz küçükken kulak↔ağız yakın → karışma); (2) parmak ağıza
+  kulaktan daha yakın olmalı; (3) parlak-piksel CV sigara yedeği gerçek footage'ta FP yüksek → KAPALI;
+  (4) native yüz < `driver_min_face_px` ise (uzak araç) geometri bastırılır. Eşikler `config/settings.py`.
+- **K-009 (2026-06-07):** ⚠️ `requirements.txt`'teki **`mediapipe==0.10.35` repodaki kodla uyumsuz** —
+  o sürümde eski `mp.solutions` API'si (FaceMesh/Hands) kaldırılmış, mevcut `driver_state` çalışmıyor.
+  Bu makinede venv'e **`mediapipe==0.10.21`** (+ `numpy<2`, `opencv-contrib-python==4.10`) kuruldu.
+  *Yapılacak:* takımla requirements pin'i `0.10.21`'e güncelle (ya da kodu yeni Tasks API'sine taşı).
 
 ---
 
@@ -296,6 +314,32 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 - **Testler:** `test_plate_tracker.py` (7) + `test_plate_crop.py` (8) eklendi → **308 yeşil** (mock).
 
 > **R7 KAPANDI:** lp_detector artık çalışan modeli oto-indiriyor; CV fallback yalnız ağsız son çare.
+
+### ✅ Tamamlanan (7 Haziran — sürücü davranışı: telefon/sigara MediaPipe geometrisi)
+- **Ne:** `driver_state.py`'ye MediaPipe **Hands** entegre edildi; telefon (el↔kulak) ve sigara
+  (parmak↔ağız) **el-yüz geometrisinden** tespit ediliyor. FaceMesh kare başına **tek** işleniyor
+  (yorgunluk + telefon + sigara aynı landmark'ları paylaşır → ~2× MediaPipe maliyeti kazanıldı).
+  Sürücü ROI'sine **büyüt + gamma/CLAHE parlat** ön-işlemesi eklendi (dış kamerada sürücü uzak/karanlık).
+  Eşikler `config/settings.py` → `driver_*` (oran-bazlı, ölçek-bağımsız; K3). Mock fallback korundu (K4).
+- **Neden:** COCO sigara/kulaklık sınıfını bilmez; telefonu da güvenilmez yakalar. Kamera **dış sabit**
+  (araç-içi değil) → sürücü camın arkasında küçük/karanlık; ham karede MediaPipe yüzü %2-5 buluyordu,
+  ROI kırp+parlat+büyüt ile ROI'de %27-55'e çıktı.
+- **Ölçülen (3 dış test videosu, 4K, CPU, ~11 FPS, ort. ~75 ms/kare):**
+  | | video_1 | video_2 | video_3 |
+  |---|---|---|---|
+  | Araç (YOLO) | %100 | %100 | %100 |
+  | Yüz (ROI'de) | %27 | %49 | %55 |
+  | **Telefon** | %17 | **%51** | %0 |
+  | **Sigara** | %4 | %0 | %0 |
+  | Yorgunluk | %0 | %41 | %13 |
+  - **Telefon ayırt edici:** yalnız video_2'de yüksek (sürücü gerçekten telefonla konuşuyor; kareyle
+    doğrulandı), diğerlerinde düşük/sıfır → doğru.
+  - **Sigara FP'leri elendi:** önce telefon-karışması (video_2 %51 yanlış) ve parlak-piksel CV yedeği
+    (video_3 %28 yanlış) vardı; K-008'deki 4 düzeltme ile **video_2/3 → %0**, video_1 %4 (gerçek el-ağız anı).
+- **Sınır:** Dış kamerada sürücü uzaksa/eller kapalıysa tespit zayıf — bu beklenen. Sağlam tespit için
+  araç yakın/net olmalı. **Kulaklık** dış kameradan MediaPipe ile görülemez → fine-tune'a bırakıldı (Faz 8).
+- **Ortam notu:** Bu makinede GPU yok (CPU torch); FPS GPU'da çok daha yüksek olur. `mediapipe` uyumsuzluğu
+  için bkz. **K-009** (requirements pin düzeltilmeli).
 
 ### ⏭️ Sıradaki (öncelik sırası)
 1. **cigarette/seatbelt/headphone verisi:** Roboflow/manuel → bu 3 sürücü-davranışı sınıfını da kapat (`merge_yolo` ile kat).

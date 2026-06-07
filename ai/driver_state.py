@@ -7,15 +7,29 @@ Türkiye LHD (sol direksiyonlu) araç varsayımı:
 
 Telefon kullanımı yalnızca sürücü ROI'sindeyse tehlike olarak işaretlenir.
 Yolcu ROI'sindeki telefon driver.passenger_phone=True olarak ayrı takip edilir.
+
+TELEFON / SİGARA / KULAKLIK TESPİTİ — neden MediaPipe geometrisi?
+  COCO ön-eğitimli YOLO 'cigarette'/'headphone' sınıfını bilmez, 'cell phone'u da
+  araç-içi küçük nesne olarak güvenilmez yakalar. Bu yüzden bu üç ihlal,
+  MediaPipe Hands (21 el landmark'ı) + FaceMesh (kulak/ağız) GEOMETRİSİNDEN
+  çıkarılır:
+    - El, KULAĞA yakın + N kare sürekli  → telefon (kulağa götürme)
+    - Parmak ucu, AĞIZA yakın + tekrarlı → sigara
+  Mesafeler YÜZ GENİŞLİĞİNE oranlanır → ölçek-bağımsız (yakın/uzak yüz fark etmez).
+  Eşikler config/settings.py'de (K3). Kütüphane yoksa mock'a düşülür (K4).
+  YOLO detections yolu da KORUNUR: model bir gün bu sınıfları üretirse (fine-tune)
+  geometri ile OR'lanır — biri bile pozitifse bayrak yanar.
 """
 from __future__ import annotations
 
+import math
 from collections import deque
 from typing import List, Optional, Tuple
 
 import numpy as np
 
 from ai.schema import Detection, DriverState, BBox
+from config.settings import get_settings
 
 EAR_THRESHOLD = 0.21
 PERCLOS_WINDOW = 30       # ~1 sn @30fps
@@ -24,9 +38,14 @@ PERCLOS_FATIGUE = 0.40    # %40 üstü -> yorgun
 # MediaPipe Face Mesh göz landmark indeksleri
 _LEFT_EYE = [33, 160, 158, 133, 153, 144]
 _RIGHT_EYE = [362, 385, 387, 263, 373, 380]
-# Ağız bölgesi (üst dudak üstü = 13, alt dudak altı = 14)
+# Ağız bölgesi (üst dudak ortası = 13, alt dudak ortası = 14)
 _MOUTH_UPPER = 13
 _MOUTH_LOWER = 14
+# Yüz yan konturu (genişlik ölçeği + kulak yaklaşığı): sağ-yan=234, sol-yan=454
+_FACE_SIDE_R = 234
+_FACE_SIDE_L = 454
+# El parmak uçları (MediaPipe Hands): başparmak,işaret,orta,yüzük,serçe
+_FINGERTIPS = (4, 8, 12, 16, 20)
 
 
 def _ear(pts) -> float:
@@ -37,11 +56,22 @@ def _ear(pts) -> float:
     return (a + b) / (2.0 * c) if c > 1e-6 else 0.0
 
 
+def _dist(a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
 class DriverMonitor:
     def __init__(self, mode: str = "auto"):
+        self.s = get_settings()
         self.mode = self._resolve(mode)
         self._mesh = None
+        self._hands = None
         self._eye_closed = deque(maxlen=PERCLOS_WINDOW)
+        # Telefon/sigara: pencere içinde "kaç kare aday" sayımıyla teyit (gürültü filtresi)
+        win = max(1, self.s.driver_state_window)
+        self._phone_hist = deque(maxlen=win)
+        self._smoke_hist = deque(maxlen=win)
+        self._headphone_hist = deque(maxlen=win)
         if self.mode == "real":
             try:
                 import mediapipe as mp
@@ -49,6 +79,12 @@ class DriverMonitor:
                     static_image_mode=False, max_num_faces=2, refine_landmarks=True,
                     min_detection_confidence=0.4,
                 )
+                if self.s.driver_mp_hands:
+                    self._hands = mp.solutions.hands.Hands(
+                        static_image_mode=False, max_num_hands=2,
+                        min_detection_confidence=self.s.driver_hand_conf,
+                        min_tracking_confidence=0.4,
+                    )
             except Exception:
                 self.mode = "mock"
 
@@ -63,107 +99,98 @@ class DriverMonitor:
         except Exception:
             return "mock"
 
-    def _detect_smoking_heuristic(self, frame: np.ndarray, driver_roi: Optional[BBox]) -> bool:
+    def _prep_roi(self, roi: np.ndarray, cv2) -> np.ndarray:
         """
-        El-ağız yakınlık tespiti (sigara içme heuristic).
-
-        Kural: Sürücü ROI içinde yüz tespit edilirse, ağız landmark'ının
-        20 piksel yakınında küçük parlak/beyaz piksel yoğunluğu varsa → sigara
-        şüphesi. COCO'da sigara sınıfı olmadığı için CV tabanlı yedek yöntem.
+        Sürücü ROI'sini MediaPipe'a hazırlar: küçükse hedef boya büyütür, loşsa
+        gamma + CLAHE ile parlatır. Dış sabit kamerada sürücü uzak/karanlık
+        olduğundan bu olmadan FaceMesh/Hands yüzü/eli yakalayamaz.
+        Büyütme yalnızca algılamayı kolaylaştırır; eşikler oran-bazlı olduğu için
+        ölçüm bozulmaz. Dönüş: (işlenmiş_roi, uygulanan_büyütme_oranı).
+        Büyütme oranı, native (gerçek) yüz boyutunu geri hesaplamak için lazım
+        (uzak-yüz bastırma eşiği için).
         """
-        if self._mesh is None or frame is None or frame.size == 0:
-            return False
+        scale = 1.0
         try:
-            import cv2
-            # Sürücü ROI crop
-            if driver_roi:
-                h, w = frame.shape[:2]
-                x1 = max(0, int(driver_roi.x1)); y1 = max(0, int(driver_roi.y1))
-                x2 = min(w, int(driver_roi.x2)); y2 = min(h, int(driver_roi.y2))
-                roi = frame[y1:y2, x1:x2]
-            else:
-                roi = frame
-                x1, y1 = 0, 0
-
-            if roi.size == 0:
-                return False
-
-            rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-            res = self._mesh.process(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
-            if not res.multi_face_landmarks:
-                return False
-
-            lm = res.multi_face_landmarks[0].landmark
-            rh, rw = roi.shape[:2]
-
-            # Ağız koordinatı (piksel)
-            mx = int(lm[_MOUTH_UPPER].x * rw)
-            my = int(lm[_MOUTH_UPPER].y * rh)
-
-            # Ağızın üstünde küçük bölge: sigara genellikle dudaktan dışarı uzanır
-            # Ağız merkezinin 60px üstünde 80x20px pencere tara
-            sig_y1 = max(0, my - 80)
-            sig_y2 = max(0, my - 10)
-            sig_x1 = max(0, mx - 40)
-            sig_x2 = min(rw, mx + 40)
-
-            if sig_y1 >= sig_y2 or sig_x1 >= sig_x2:
-                return False
-
-            region = rgb[sig_y1:sig_y2, sig_x1:sig_x2]
-            if region.size == 0:
-                return False
-
-            # CLAHE ile kontrastı artır, beyaz/gri ince nesne ara
-            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
-            enh = clahe.apply(region)
-            _, thresh = cv2.threshold(enh, 180, 255, cv2.THRESH_BINARY)
-
-            # İnce yatay nesne: genişlik >> yükseklik (sigara oranı ~10:1)
-            cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for c in cnts:
-                rx, ry, rw2, rh2 = cv2.boundingRect(c)
-                if rw2 < 8 or rh2 < 2:
-                    continue
-                ar = rw2 / max(rh2, 1)
-                if ar >= 3.0 and rw2 * rh2 > 20:
-                    return True
+            rh0, rw0 = roi.shape[:2]
+            short = min(rh0, rw0)
+            if 0 < short < self.s.driver_roi_min_px:
+                scale = min(self.s.driver_roi_max_upscale, self.s.driver_roi_min_px / short)
+                roi = cv2.resize(roi, (int(rw0 * scale), int(rh0 * scale)),
+                                 interpolation=cv2.INTER_CUBIC)
+            if self.s.driver_roi_brighten:
+                # Gamma (gölgeleri aç) + L kanalında CLAHE (yerel kontrast)
+                g = self.s.driver_roi_gamma
+                if g and abs(g - 1.0) > 1e-3:
+                    lut = np.array([((i / 255.0) ** (1.0 / g)) * 255
+                                    for i in range(256)], dtype=np.uint8)
+                    roi = cv2.LUT(roi, lut)
+                lab = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB)
+                l, a, b = cv2.split(lab)
+                l = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(l)
+                roi = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
         except Exception:
             pass
-        return False
+        return roi, scale
 
-    def _fatigue_real(self, frame: np.ndarray, driver_roi: Optional[BBox]) -> Tuple[Optional[float], Optional[float], bool]:
+    # ── Kare işleme: FaceMesh + Hands TEK SEFER (yorgunluk/telefon/sigara paylaşır) ──
+    def _process_real(self, frame: np.ndarray, driver_roi: Optional[BBox]):
+        """
+        Sürücü ROI crop'unu BİR kez FaceMesh ve Hands'ten geçirir.
+
+        Dönüş: (face_lm, hands_px, roi_gray, rh, rw, scale)
+          face_lm  : ilk yüzün landmark listesi (normalize, 0..1) | None
+          hands_px : her el için [(x,y), ...] ROI-piksel koordinatları (liste)
+          roi_gray : ROI'nin gri tonu (parlak-piksel sigara yedeği için) | None
+          rh, rw   : ROI yükseklik/genişlik (px, büyütme SONRASI)
+          scale    : uygulanan büyütme oranı (native yüz boyutunu geri hesaplamak için)
+        Önceki kod FaceMesh'i yorgunluk + sigara için AYRI AYRI işliyordu; burada
+        tek process ile ~2× MediaPipe maliyeti kazanılır.
+        """
         try:
             import cv2
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) if frame.ndim == 3 else frame
         except Exception:
-            rgb = frame
-        h, w = frame.shape[:2]
+            return None, [], None, 0, 0, 1.0
 
-        # Sürücü ROI varsa yalnızca o bölgeyi analiz et
+        h, w = frame.shape[:2]
         if driver_roi:
             x1, y1 = max(0, int(driver_roi.x1)), max(0, int(driver_roi.y1))
             x2, y2 = min(w, int(driver_roi.x2)), min(h, int(driver_roi.y2))
-            analyze = rgb[y1:y2, x1:x2]
-            offset_x, offset_y = x1, y1
+            roi = frame[y1:y2, x1:x2]
         else:
-            analyze = rgb
-            offset_x, offset_y = 0, 0
+            roi = frame
+        if roi.size == 0:
+            return None, [], None, 0, 0, 1.0
 
-        if analyze.size == 0:
+        # ── Ön-işleme: dış kamerada sürücü uzak+karanlık → büyüt + parlat ──
+        roi, scale = self._prep_roi(roi, cv2)
+
+        rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+        roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        rh, rw = roi.shape[:2]
+
+        face_lm = None
+        if self._mesh is not None:
+            fres = self._mesh.process(rgb)
+            if fres.multi_face_landmarks:
+                face_lm = fres.multi_face_landmarks[0].landmark
+
+        hands_px: List[List[Tuple[float, float]]] = []
+        if self._hands is not None:
+            hres = self._hands.process(rgb)
+            if hres.multi_hand_landmarks:
+                for hand in hres.multi_hand_landmarks:
+                    hands_px.append([(lm.x * rw, lm.y * rh) for lm in hand.landmark])
+
+        return face_lm, hands_px, roi_gray, rh, rw, scale
+
+    # ── Yorgunluk: paylaşılan yüz landmark'larından EAR/PERCLOS ──
+    def _fatigue_from_face(self, face_lm, rh: int, rw: int) -> Tuple[Optional[float], float, bool]:
+        if face_lm is None:
             self._eye_closed.append(0)
             return None, self._perclos(), False
-
-        res = self._mesh.process(analyze)
-        if not res.multi_face_landmarks:
-            self._eye_closed.append(0)
-            return None, self._perclos(), False
-
-        lm = res.multi_face_landmarks[0].landmark
-        rh, rw = analyze.shape[:2]
 
         def pick(idx):
-            return [(lm[i].x * rw, lm[i].y * rh) for i in idx]
+            return [(face_lm[i].x * rw, face_lm[i].y * rh) for i in idx]
 
         ear = (_ear(pick(_LEFT_EYE)) + _ear(pick(_RIGHT_EYE))) / 2.0
         self._eye_closed.append(1 if ear < EAR_THRESHOLD else 0)
@@ -175,12 +202,99 @@ class DriverMonitor:
             return 0.0
         return round(sum(self._eye_closed) / len(self._eye_closed), 3)
 
-    def _fatigue_mock(self, frame: np.ndarray) -> Tuple[Optional[float], Optional[float], bool]:
+    def _fatigue_mock(self, frame: np.ndarray) -> Tuple[Optional[float], float, bool]:
         b = float(frame.mean()) if frame is not None and frame.size else 128.0
         ear = round(0.30 - (1.0 - min(b, 255) / 255.0) * 0.18, 3)
         self._eye_closed.append(1 if ear < EAR_THRESHOLD else 0)
         perclos = self._perclos()
         return ear, perclos, perclos > PERCLOS_FATIGUE
+
+    # ── Telefon / sigara / kulaklık: el-yüz geometrisi ──
+    def _detect_phone_smoke(self, face_lm, hands_px, rh: int, rw: int,
+                            scale: float = 1.0) -> Tuple[bool, bool, bool]:
+        """
+        Bu KARE için aday tespitleri döndürür (sürdürme teyidi assess'te yapılır):
+          phone_cand : el (herhangi nokta) kulağa, yüz-genişliğinin oranından yakınsa
+          smoke_cand : parmak ucu ağıza, yüz-genişliğinin oranından yakınsa
+          hand_at_ear: kulaklık sezgisi için ham "el kulakta" sinyali
+
+        Yüz yoksa hiçbir şey karşılaştırılamaz (referans/ölçek yok) → hepsi False.
+        """
+        if face_lm is None or not hands_px:
+            return False, False, False
+
+        # Yüz genişliği = ölçek referansı (px). Yan kontur 234↔454 arası.
+        pr = (face_lm[_FACE_SIDE_R].x * rw, face_lm[_FACE_SIDE_R].y * rh)
+        pl = (face_lm[_FACE_SIDE_L].x * rw, face_lm[_FACE_SIDE_L].y * rh)
+        face_w = _dist(pr, pl)
+        if face_w < 1e-3:
+            return False, False, False
+
+        # Uzak/küçük yüz kapısı: native (büyütme öncesi) yüz genişliği eşiğin
+        # altındaysa el-parmak landmark'ları gürültülü → güvenilmez, bastır.
+        if (face_w / max(scale, 1e-6)) < self.s.driver_min_face_px:
+            return False, False, False
+
+        ears = [pr, pl]  # kulak/yan-yüz yaklaşığı
+        mu, ml = face_lm[_MOUTH_UPPER], face_lm[_MOUTH_LOWER]
+        mouth = ((mu.x + ml.x) / 2 * rw, (mu.y + ml.y) / 2 * rh)
+
+        phone_thr = self.s.driver_phone_ear_ratio * face_w
+        smoke_thr = self.s.driver_smoke_mouth_ratio * face_w
+
+        phone_cand = smoke_cand = hand_at_ear = False
+        for hand in hands_px:
+            # Telefon: elin herhangi noktası kulağa yakın mı?
+            d_ear = min(_dist(pt, e) for pt in hand for e in ears)
+            at_ear = d_ear < phone_thr
+            if at_ear:
+                phone_cand = True
+                hand_at_ear = True
+            # Sigara: parmak ucu ağıza yakın mı? AMA telefon-kulakta değilken.
+            # NEDEN: yüz küçükken kulak↔ağız yakın; telefonu kulağa götüren el
+            # ağıza da "yakın" görünür → sigara yanlış pozitifi. Bunu önlemek için
+            # (1) bu elin kulakta olmaması ve (2) parmağın ağıza, kulaktan DAHA
+            # yakın olması şartı aranır (parmak gerçekten ağızda).
+            if not at_ear:
+                tips = [hand[i] for i in _FINGERTIPS if i < len(hand)]
+                if tips:
+                    d_mouth = min(_dist(t, mouth) for t in tips)
+                    if d_mouth < smoke_thr and d_mouth < d_ear:
+                        smoke_cand = True
+        return phone_cand, smoke_cand, hand_at_ear
+
+    def _detect_smoking_brightpixel(self, roi_gray: np.ndarray, face_lm, rh: int, rw: int) -> bool:
+        """
+        Ağız üstünde ince/parlak yatay nesne (sigara) arayan CV yedeği.
+        El geometrisi sigarayı kaçırdığında (el kadrajda değilse) destekler.
+        Paylaşılan roi_gray + face_lm kullanır (ikinci MediaPipe process YOK).
+        """
+        if roi_gray is None or face_lm is None:
+            return False
+        try:
+            import cv2
+            mx = int(face_lm[_MOUTH_UPPER].x * rw)
+            my = int(face_lm[_MOUTH_UPPER].y * rh)
+            sig_y1 = max(0, my - 80); sig_y2 = max(0, my - 10)
+            sig_x1 = max(0, mx - 40);  sig_x2 = min(rw, mx + 40)
+            if sig_y1 >= sig_y2 or sig_x1 >= sig_x2:
+                return False
+            region = roi_gray[sig_y1:sig_y2, sig_x1:sig_x2]
+            if region.size == 0:
+                return False
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
+            enh = clahe.apply(region)
+            _, thresh = cv2.threshold(enh, 180, 255, cv2.THRESH_BINARY)
+            cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for c in cnts:
+                _, _, rw2, rh2 = cv2.boundingRect(c)
+                if rw2 < 8 or rh2 < 2:
+                    continue
+                if (rw2 / max(rh2, 1)) >= 3.0 and rw2 * rh2 > 20:   # ince yatay (~sigara)
+                    return True
+        except Exception:
+            pass
+        return False
 
     @staticmethod
     def driver_roi(vehicle_bbox: Optional[BBox], frame_shape) -> Optional[BBox]:
@@ -230,14 +344,7 @@ class DriverMonitor:
         droi = self.driver_roi(vehicle_bbox, frame.shape if frame is not None else (0, 0))
         proi = self.passenger_roi(vehicle_bbox, frame.shape if frame is not None else (0, 0))
 
-        # Yorgunluk yalnızca kritik profilde güvenilir (yüksek çözünürlük)
-        if profile == "critical" and frame is not None and frame.size:
-            if self.mode == "real":
-                ear, perclos, fatigue = self._fatigue_real(frame, droi)
-            else:
-                ear, perclos, fatigue = self._fatigue_mock(frame)
-            state.ear, state.perclos, state.fatigue = ear, perclos, fatigue
-
+        # ── 1) YOLO detections yolu (model bu sınıfları üretirse — fine-tune sonrası) ──
         if droi is not None:
             for d in detections:
                 in_driver = self._overlaps(droi, d.bbox)
@@ -245,17 +352,14 @@ class DriverMonitor:
 
                 if d.label == "phone":
                     if in_driver:
-                        state.phone_use = True      # Sürücü telefon → tehlike
+                        state.phone_use = True       # Sürücü telefon → tehlike
                     elif in_passenger:
-                        state.passenger_phone = True  # Yolcu telefon → kayıt ama tehlike değil
+                        state.passenger_phone = True # Yolcu telefon → kayıt ama tehlike değil
                     else:
-                        # Araç içinde ama bölge belirlenemedi → konservatif: sürücü say
-                        state.phone_use = True
-
+                        state.phone_use = True       # Bölge belirsiz → konservatif: sürücü say
                 elif d.label == "cigarette":
                     if in_driver:
                         state.smoking = True
-
                 elif d.label == "headphone":
                     if in_driver:
                         state.headphone = True
@@ -263,8 +367,42 @@ class DriverMonitor:
             # COCO'da emniyet kemeri sınıfı yok; fine-tune gelene kadar devre dışı
             state.no_seatbelt = False
 
-        # Sigara içme heuristic (COCO sigara sınıfı yok → CV yedek)
-        if not state.smoking and self.mode == "real" and profile == "critical":
-            state.smoking = self._detect_smoking_heuristic(frame, droi)
+        # ── 2) MediaPipe geometri yolu (telefon/sigara/kulaklık) — yalnız kritik+real ──
+        # Tüm MediaPipe analizi TEK kare işlemeyle yapılır; sonuçlar paylaşılır.
+        if profile == "critical" and frame is not None and frame.size:
+            if self.mode == "real":
+                face_lm, hands_px, roi_gray, rh, rw, scale = self._process_real(frame, droi)
+
+                # Yorgunluk (paylaşılan yüz landmark'ı)
+                ear, perclos, fatigue = self._fatigue_from_face(face_lm, rh, rw)
+                state.ear, state.perclos, state.fatigue = ear, perclos, fatigue
+
+                # Telefon / sigara adayları (bu kare)
+                phone_cand, smoke_cand, hand_at_ear = self._detect_phone_smoke(
+                    face_lm, hands_px, rh, rw, scale)
+                # Sigara CV yedeği (opsiyonel, varsayılan kapalı — gerçek footage'ta FP yüksek):
+                # el kadrajda olmasa da ağız üstü ince nesne. Telefon adayı varken çalıştırma.
+                if (self.s.driver_smoke_brightpixel
+                        and not smoke_cand and not phone_cand):
+                    smoke_cand = self._detect_smoking_brightpixel(roi_gray, face_lm, rh, rw)
+
+                # Sürdürme/tekrar penceresi → gürültüyü ele (anlık tek-kare false positive'i bastırır)
+                self._phone_hist.append(1 if phone_cand else 0)
+                self._smoke_hist.append(1 if smoke_cand else 0)
+                self._headphone_hist.append(1 if (hand_at_ear and not phone_cand) else 0)
+
+                if sum(self._phone_hist) >= self.s.driver_phone_sustain:
+                    state.phone_use = True
+                if sum(self._smoke_hist) >= self.s.driver_smoke_sustain:
+                    state.smoking = True
+                # Kulaklık (opsiyonel, düşük güven — varsayılan kapalı): el kulakta
+                # sabit ama telefon teyidi yoksa. Telefon teyit edilirse kulaklık sayma.
+                if (self.s.driver_headphone_enable and not state.phone_use
+                        and sum(self._headphone_hist) >= self.s.driver_phone_sustain):
+                    state.headphone = True
+            else:
+                # Mock: yorgunluk sentetik; telefon mock detector'dan detections yoluyla gelir
+                ear, perclos, fatigue = self._fatigue_mock(frame)
+                state.ear, state.perclos, state.fatigue = ear, perclos, fatigue
 
         return state
