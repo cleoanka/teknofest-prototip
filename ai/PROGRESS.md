@@ -12,7 +12,7 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 
 **Genel:**
 - Prototip repo **temel alındı**; uzak `cleoanka/teknofest-prototip` ile senkron (K7 akışı).
-- YZ hattı **uçtan uca çalışıyor**: mock (**336 test yeşil**) **ve** gerçek GPU (MPS/CUDA + YOLOv8 + plaka modeli) doğrulandı.
+- YZ hattı **uçtan uca çalışıyor**: mock (**343 test yeşil**) **ve** gerçek GPU (MPS/CUDA + YOLOv8 + plaka modeli) doğrulandı.
 - Eğitim/veri hattı **kodlandı ve test edildi** (aşağıdaki modüller).
 
 **Hazır olan YZ modülleri:**
@@ -63,6 +63,16 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
   (yolcu telefonu yalnız `passenger_phone` olarak kayda geçer). `person` yoksa eski **geometrik sağ-yarı**
   yedeğine güvenli düşüş. Ayarlar: `driver_person_select`, `driver_select_{right,bottom}_weight`.
   **9 yeni test** (`tests/test_driver_select.py`) — toplam **336 yeşil**.
+- **Faz 5c — Sürücü kimlik kilidi (track-id)** ✓ (2026-06-07) — aynı kişi (ByteTrack person
+  `track_id`) `driver_lock_frames` (varsayılan 8, 5–10 arası) ardışık karede "en sağ-alt = sürücü"
+  seçilirse o araç için sürücü kimliği **kilitlenir**; bundan sonra sürücü **hep o kişidir**.
+  Araç kadrajdan **yarı çıkıp** sürücü kutusu bozulsa/kaybolsa bile sürücü **arka koltuktaki birine
+  ATLAMAZ** (`_resolve_driver` durum makinesi). Kilitli sürücü geçici kaybolursa `driver_lock_ttl`
+  (varsayılan 30) kare boyunca **kimse sürücü yapılmaz** (ROI son bilinen kutuda tutulur, davranış
+  bayraklarını latch korur); süre dolarsa kilit bırakılıp yeniden edinilir. `person` track_id yoksa
+  (mock / takipçi kapalı) kilit kendiliğinden devre dışı → saf sağ-alt. Sahneden çıkan aracın kilidi
+  `prune_locks` ile temizlenir. Ayarlar: `driver_lock_{enable,frames,ttl}`. **7 yeni test** —
+  toplam **343 yeşil**.
 - **Faz 6 — Hız kalibrasyonu** → BEKLEYEN
 - **Faz 7 — QoD doğrulama (eval: Normal vs Kritik + bant verimliliği)** ✓ MİNİ (2026-06-06) — gerçek
   video üzerinde ~%43 bant tasarrufu (şartname %40 kriteri sağlandı, `eval/qod_video.py`).

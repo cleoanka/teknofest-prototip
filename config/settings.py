@@ -185,6 +185,17 @@ class Settings(BaseSettings):
     # Ağırlıklar açıya göre ayarlanabilir (ör. tam profilde sağ baskın → right_w↑).
     driver_select_right_weight: float = Field(default=1.0)
     driver_select_bottom_weight: float = Field(default=1.0)
+    # ── Sürücü KİMLİK KİLİDİ (track-id) ──
+    # Aynı kişi (ByteTrack person id) driver_lock_frames ardışık karede "en sağ-alt
+    # = sürücü" seçilirse o kişiye sürücü kimliği KİLİTLENİR; bundan sonra o araç için
+    # sürücü HEP o kişidir. Araç kadrajdan yarı çıkıp sürücü kutusu bozulsa/kaybolsa
+    # bile sürücü arka koltuktaki birine ATLAMAZ. Kilitli sürücü geçici kaybolursa
+    # driver_lock_ttl kare boyunca KİMSE sürücü yapılmaz (davranış bayraklarını latch
+    # tutar); süre dolarsa kilit bırakılıp yeniden edinilir. person track_id yoksa
+    # (mock / takipçi kapalı) kilit kendiliğinden DEVRE DIŞIdır → saf sağ-alt seçim.
+    driver_lock_enable: bool = Field(default=True)
+    driver_lock_frames: int = Field(default=8)    # 5-10 arası: bu kadar ardışık kare → kilit
+    driver_lock_ttl: int = Field(default=30)       # kilitli sürücü kaybolunca koru (kare) ~0.6sn@50fps
 
     # Çoklu nesne takipçisi (real mod)
     # bytetrack → YOLOv8 dahili ByteTrack (hızlı, kamera hareketi yok)

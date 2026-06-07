@@ -23,6 +23,12 @@ def _obj(label, x1, y1, x2, y2):
     return Detection(label=label, confidence=0.8, bbox=BBox(x1=x1, y1=y1, x2=x2, y2=y2))
 
 
+def _pid(tid, x1, y1, x2, y2):
+    """track_id'li person (gerçek-mod ByteTrack benzeri) — kimlik kilidi testleri için."""
+    return Detection(label="person", confidence=0.9, track_id=tid,
+                     bbox=BBox(x1=x1, y1=y1, x2=x2, y2=y2))
+
+
 def test_bottom_right_person_is_driver():
     """İki kişiden sağ-alttaki sürücü, diğeri yolcu seçilmeli."""
     dm = DriverMonitor(mode="mock")
@@ -132,3 +138,124 @@ def test_ambiguous_phone_with_passengers_is_not_risk():
                    driver_bbox=droi, passenger_boxes=pax, driver_is_person=ip)
     assert st.phone_use is False
     assert assess_risk(st, speed_kmh=40, vtype="car").score == 0
+
+
+# ── Sürücü KİMLİK KİLİDİ (track-id) ────────────────────────────────────────────
+
+# Test stabilitesi için kilit eşiğini sabitle (ayar değişse de testler bağımsız).
+LOCK_N = 5
+
+
+def _fresh_locking_monitor():
+    dm = DriverMonitor(mode="mock")
+    dm.s.driver_lock_enable = True
+    dm.s.driver_lock_frames = LOCK_N
+    dm.s.driver_lock_ttl = 10
+    return dm
+
+
+def test_driver_locks_after_n_frames():
+    """Aynı track_id LOCK_N kare sürücü seçilince kilitlenmeli."""
+    dm = _fresh_locking_monitor()
+    drv = _pid(7, 600, 120, 850, 380)   # sağ-alt
+    pax = _pid(3, 100, 20, 300, 250)
+    for _ in range(LOCK_N):
+        dm.select_rois([drv, pax], VEH, FRAME, vehicle_id=1)
+    assert dm._driver_lock.get(1) == 7
+
+
+def test_locked_driver_does_not_jump_to_backseat():
+    """Kilitlendikten sonra sürücü kutusu KAYBOLUNCA sürücü arka koltuğa ATLAMAZ.
+
+    Senaryo: araç yarı kadraj dışına çıkar, sürücünün (id=7) kutusu artık yok;
+    arka koltuktaki yolcu (id=3) şimdi en sağ-alt. Kilit sayesinde id=3 sürücü
+    YAPILMAMALI → kimse sürücü değil (driver_box son bilinen kutuda, yolcu risksiz).
+    """
+    dm = _fresh_locking_monitor()
+    drv = _pid(7, 600, 120, 850, 380)
+    pax = _pid(3, 100, 20, 300, 250)
+    for _ in range(LOCK_N):
+        droi, _, _ = dm.select_rois([drv, pax], VEH, FRAME, vehicle_id=1)
+    last_driver_box = droi
+    assert dm._driver_lock.get(1) == 7
+
+    # Sürücü kaybolur; yolcu (id=3) artık tek/en sağ-alt aday
+    droi2, pax2, ip2 = dm.select_rois([pax], VEH, FRAME, vehicle_id=1)
+    # Yolcu kutusu sürücü ROI'si OLMAMALI
+    assert not (droi2 and droi2.x1 == pax.bbox.x1 and droi2.y1 == pax.bbox.y1)
+    # Son bilinen sürücü kutusu korunur; yolcu passenger listesinde (risksiz)
+    assert (droi2.x1, droi2.y1) == (last_driver_box.x1, last_driver_box.y1)
+    assert any(b.x1 == pax.bbox.x1 for b in pax2)
+
+
+def test_locked_driver_resumes_when_reappears():
+    """Kilitli sürücü kısa süre kaybolup geri gelince yine sürücü olmalı."""
+    dm = _fresh_locking_monitor()
+    drv = _pid(7, 600, 120, 850, 380)
+    pax = _pid(3, 100, 20, 300, 250)
+    for _ in range(LOCK_N):
+        dm.select_rois([drv, pax], VEH, FRAME, vehicle_id=1)
+    # 3 kare kayıp (TTL=10 içinde)
+    for _ in range(3):
+        dm.select_rois([pax], VEH, FRAME, vehicle_id=1)
+    # Geri döner
+    droi, _, ip = dm.select_rois([drv, pax], VEH, FRAME, vehicle_id=1)
+    assert ip is True
+    assert (droi.x1, droi.y1) == (drv.bbox.x1, drv.bbox.y1)
+    assert dm._driver_lock.get(1) == 7
+
+
+def test_lock_released_after_ttl_then_reacquires():
+    """Kilitli sürücü TTL'den uzun kaybolursa kilit bırakılır; yeni sürücü edinilir."""
+    dm = _fresh_locking_monitor()
+    drv = _pid(7, 600, 120, 850, 380)
+    pax = _pid(3, 100, 20, 300, 250)
+    for _ in range(LOCK_N):
+        dm.select_rois([drv, pax], VEH, FRAME, vehicle_id=1)
+    assert dm._driver_lock.get(1) == 7
+    # TTL+1 kare boyunca sürücü yok → kilit bırakılmalı
+    for _ in range(dm.s.driver_lock_ttl + 1):
+        dm.select_rois([pax], VEH, FRAME, vehicle_id=1)
+    assert dm._driver_lock.get(1) is None
+    # Yalnız yolcu (id=3) varken LOCK_N kare daha → o artık sürücü olur
+    for _ in range(LOCK_N):
+        droi, _, _ = dm.select_rois([pax], VEH, FRAME, vehicle_id=1)
+    assert dm._driver_lock.get(1) == 3
+
+
+def test_lock_keeps_driver_even_if_passenger_becomes_bottom_right():
+    """Kilitliyken sürücü mevcut ama bir yolcu daha sağ-alta geçse de sürücü değişmez."""
+    dm = _fresh_locking_monitor()
+    drv = _pid(7, 600, 120, 850, 380)
+    pax = _pid(3, 100, 20, 300, 250)
+    for _ in range(LOCK_N):
+        dm.select_rois([drv, pax], VEH, FRAME, vehicle_id=1)
+    # Yolcu (id=3) şimdi sürücüden daha sağ-altta görünüyor
+    pax_now = _pid(3, 700, 200, 980, 395)
+    droi, paxes, ip = dm.select_rois([drv, pax_now], VEH, FRAME, vehicle_id=1)
+    # Sürücü hâlâ id=7 (kutusu)
+    assert (droi.x1, droi.y1) == (drv.bbox.x1, drv.bbox.y1)
+    assert any(b.x1 == pax_now.bbox.x1 for b in paxes)
+
+
+def test_prune_locks_clears_absent_vehicles():
+    """Sahneden çıkan aracın kilit durumu prune_locks ile temizlenmeli."""
+    dm = _fresh_locking_monitor()
+    drv = _pid(7, 600, 120, 850, 380)
+    for _ in range(LOCK_N):
+        dm.select_rois([drv], VEH, FRAME, vehicle_id=42)
+    assert 42 in dm._driver_lock
+    dm.prune_locks({1, 2})          # 42 artık sahnede yok
+    assert 42 not in dm._driver_lock
+    assert 42 not in dm._driver_cand
+
+
+def test_no_track_id_skips_lock():
+    """track_id olmayan (mock) kişilerde kilit kurulmaz → saf sağ-alt sürer."""
+    dm = _fresh_locking_monitor()
+    drv = _person(600, 120, 850, 380)   # track_id yok
+    pax = _person(100, 20, 300, 250)
+    for _ in range(LOCK_N + 2):
+        droi, _, _ = dm.select_rois([drv, pax], VEH, FRAME, vehicle_id=1)
+    assert dm._driver_lock == {}        # hiç kilit yok
+    assert (droi.x1, droi.y1) == (drv.bbox.x1, drv.bbox.y1)

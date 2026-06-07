@@ -353,7 +353,8 @@ class Pipeline:
             # Sürücü / yolcu ROI — kişi-bazlı (kabindeki en sağ-alttaki kişi = sürücü).
             # Bir kez hesaplanır; görselleştirme + Blok E (assess) aynı sonucu paylaşır.
             driver_roi_box, passenger_person_boxes, driver_is_person = \
-                self.driver.select_rois(detections, vehicle.bbox, (h, w))
+                self.driver.select_rois(detections, vehicle.bbox, (h, w),
+                                        vehicle_id=vehicle.track_id)
             vehicle.driver_bbox = driver_roi_box
             if passenger_person_boxes:
                 vehicle.passenger_bbox = _union_bbox(passenger_person_boxes)
@@ -491,6 +492,8 @@ class Pipeline:
             del self._speed_hist[tid]
         # Sahneden çıkmış araçların plaka durumunu da temizle (ttl ile)
         self.plate_tracker.prune(alive_ids, self._frame_id)
+        # Sürücü kimlik-kilidi: bu karedeki araç track-id'leri dışındakileri temizle
+        self.driver.prune_locks({d.track_id for d in veh_dets if d.track_id is not None})
 
         # Aşama 4 — opsiyonel otomatik şerit homografisi (varsayılan kapalı).
         # Açıksa periyodik olarak kareden şerit→homografi dener; kurulursa metrik
