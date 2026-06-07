@@ -8,7 +8,7 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 
 ---
 
-## 1. Mevcut Durum (son güncelleme: 2026-06-07)
+## 1. Mevcut Durum (son güncelleme: 2026-06-08)
 
 **Genel:**
 - Prototip repo **temel alındı**; uzak `cleoanka/teknofest-prototip` ile senkron (K7 akışı).
@@ -435,6 +435,28 @@ TEKNOFEST 2026 · 5G & YZ ile Akıllı Yol Güvenliği. Temel repo: `cleoanka/te
 - **Tespit kutuları:** `DriverState.phone_bbox` + `cigarette_bbox` (tetikleyen elin tam-kare kutusu,
   latch ile senkron). İşaretli videolarda telefon=mavi, sigara=kırmızı kutu çizilir. Bkz. **K-012**.
 - **Nihai (3 dış video):** video_1 TEL %0 / SIG %59; video_2 TEL %61 / SIG %0; video_3 temiz. Mock 18 test yeşil.
+
+### ✅ Tamamlanan (8 Haziran — v4 model: yolov8m@768, held-out test ile dürüst seçim)
+- **Held-out test ayrıldı:** `ai/training/carve_test_split.py` ile train'den seed=42 rastgele 1000
+  imaj `test/`'e taşındı (geri-alınabilir manifest). Dataset: **train 13171 / val 855 / test 1000**,
+  audit TEMİZ (sızıntı yok). *Neden:* val erken-durdurmada kullanıldığı için val mAP iyimser; gerçek
+  genelleme ayrı test ister.
+- **v4 eğitimi** (`yg_types_v4`, yolov8m, imgsz 768, batch 8, müfredat: ısınma donuk → ana çözük):
+  iki aşamanın `best.pt`'si **aynı test split'inde** temiz değerlendirildi (`tools/eval_test.py`):
+
+  | model | car | minibus | bus | truck | moto | person | phone | **ALL** | mAP50-95 | recall |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | **ısınma (donuk)** | .743 | .984 | .804 | .745 | .771 | .795 | .674 | **.788** | **.558** | **.705** |
+  | ana (çözük, ep60) | .739 | .989 | .798 | .728 | .718 | .782 | .641 | .771 | .551 | .684 |
+
+- **K-013 (bulgu):** Omurgayı çözen ana aşama (full-aug, EarlyStop ep80, best ep60) **held-out test'te
+  geriledi** (.771<.788, recall .684<.705) — val'de yüksekti ama gerçek genellemede değil. **K-008
+  13k imajda bile geçerli.** Asıl kazanç **model boyutu (yolov8s→m) + imgsz (640→768)**'den geldi;
+  omurga zaten v2'de de donuktu, çözmek katkı YAPMADI. → **ısınma `best.pt` = v4 seçildi.**
+- **v2 → v4:** ALL .684 → **.788 (+0.10)**; truck +.22, phone +.17, car +.13, bus +.12. Her sınıfta ileri.
+  → `models/yolguvenligi_types_v4.pt` (Git LFS), `.env` `YOLO_MODEL_CRITICAL` güncellendi; v2 kaldırıldı.
+- **Sonraki deneme (.788'i geçmek):** ısınma yalnız 12 epoch'tu → donuk omurgayı daha uzun (40-50 ep)
+  eğit, ya da imgsz 896 / yolov8l donuk. **Çözme yok** (K-013).
 
 ### ⏭️ Sıradaki (öncelik sırası)
 0. **PnP §8.2 çapraz doğrulama:** `last_pose` PnP-hızı ↔ homografi hızı `methods_agree` ile
