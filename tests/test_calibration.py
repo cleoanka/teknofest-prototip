@@ -132,7 +132,7 @@ def test_metric_speed_from_vehicle_only_field():
     assert abs(kmh - 18.0) < 1.0
 
 
-# ── Aşama 3 — pencere + aykırı reddi + EMA ───────────────────────────────────
+# ── Aşama 3 — pencere + aykırı reddi + Kalman ────────────────────────────────
 
 def _estimator_with_ppm(ppm=100.0, **overrides):
     s = get_settings().model_copy(update=overrides) if overrides else get_settings()
@@ -170,24 +170,31 @@ def test_window_rejects_teleport_outlier():
     assert calib and abs(kmh - 18.0) < 2.0
 
 
-def test_ema_damps_sudden_change():
-    # window=1 → her çağrı son adımı kullanır; EMA(alpha=0.4) ani değişimi yumuşatır.
-    est = _estimator_with_ppm(100.0, speed_window_frames=1, speed_ema_alpha=0.4)
-    t = _track_from_path([(0, 360), (50, 360)], [0.0, 0.1])   # 5 m/s
-    kmh1, _ = est.estimate(t)
-    assert abs(kmh1 - 18.0) < 1.0                              # ema=5
-    t.update((150, 350, 250, 360), ts=0.2)                    # foot 200 → 15 m/s ham
+def test_kalman_damps_sudden_change():
+    # window=1 → her çağrı yalnız son adımı görür. Kalman (KalmanSpeed1D) EMA'nın
+    # yerini aldı: ısındıktan (P büyük→küçük) sonra kazanç ~0.45'e oturur ve ani
+    # tek-kare sıçramasını tam takip etmez — ham 54 km/h'e değil, arasına yumuşatır.
+    est = _estimator_with_ppm(100.0, speed_window_frames=1)
+    t = _track_from_path([(0, 360)], [0.0])
+    ts = 0.1
+    kmh = None
+    for x in (50, 100, 150, 200, 250):          # sabit 50 px/0.1 s = 5 m/s ile ısıt
+        t.update((x - 50, 350, x + 50, 360), ts=ts)
+        kmh, _ = est.estimate(t)                 # her çağrı 1 Kalman güncellemesi
+        ts += 0.1
+    assert abs(kmh - 18.0) < 1.0                 # ısınmış, kararlı 18 km/h
+    t.update((350, 350, 450, 360), ts=ts)        # foot 250→400 = 150 px/0.1 s = 15 m/s ham
     kmh2, _ = est.estimate(t)
-    # ema = 0.4*15 + 0.6*5 = 9 m/s = 32.4 km/h (ham 54'ten düşük, 18'den yüksek)
-    assert 18.0 < kmh2 < 54.0 and abs(kmh2 - 32.4) < 1.5
+    # kararlı kazanç (~0.45): 5 + 0.45*(15-5) ≈ 9.5 m/s ≈ 34 km/h (ham 54'ten düşük, 18'den yüksek)
+    assert 18.0 < kmh2 < 54.0 and abs(kmh2 - 34.0) < 4.0
 
 
 def test_prune_clears_stale_track_state():
     est = _estimator_with_ppm(100.0)
     est.estimate(_track_from_path([(0, 360), (50, 360)], [0.0, 0.1]))
-    assert 1 in est._ema
+    assert 1 in est._kalman
     est.prune(active_ids=set())      # track 1 artık yok
-    assert 1 not in est._ema
+    assert 1 not in est._kalman
 
 
 # ── Aşama 4 — şerit homografisi ──────────────────────────────────────────────
@@ -248,6 +255,29 @@ def test_homography_takes_priority_over_scale_field():
     t = _track_from_path([g2i.to_ground(1.75, 4.0), g2i.to_ground(1.75, 5.0)], [0.0, 0.1])
     _, calib = est.estimate(t)
     assert calib is True
+
+
+# ── Problem 2 — homografi↔plaka ölçek çapraz-kontrolü (yol-tipi koruması) ─────
+
+def test_homography_scale_conflict_guard():
+    foot = (320.0, 360.0)                          # kadraj içi, geçerli homografi bölgesi
+    # Tutarlı: ölçek-alanını homografinin ima ettiği ppm'le besle → çatışma YOK
+    ok = MetricSpeedEstimator(get_settings())
+    ok.set_homography(_i2g())
+    ppm_h = ok._local_ppm_homography(*foot)
+    assert ppm_h and ppm_h > 0
+    for y in (300, 330, 360, 390, 420, 450):
+        ok.scale.add(y, ppm_h)
+    ok.scale.fit()
+    assert ok._homography_scale_conflict(foot) is False
+
+    # Çatışmalı: plaka çapası 2.5× farklı ppm diyor (homografi yol-tipini yanlış sandı)
+    bad = MetricSpeedEstimator(get_settings())
+    bad.set_homography(_i2g())
+    for y in (300, 330, 360, 390, 420, 450):
+        bad.scale.add(y, ppm_h * 2.5)
+    bad.scale.fit()
+    assert bad._homography_scale_conflict(foot) is True
 
 
 def test_lane_detect_graceful_on_bad_input():

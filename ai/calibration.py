@@ -242,15 +242,19 @@ class MetricSpeedEstimator:
         if self.scale.n_samples >= self.scale.min_samples:
             self.scale.fit()
 
-    def _step_meters(self, f0, f1) -> Optional[float]:
+    def _step_meters(self, f0, f1, use_homography: Optional[bool] = None) -> Optional[float]:
         """İki yer-temas noktası arası metrik yer değiştirme (m).
 
         Füzyon önceliği (§7.1): homografi varsa noktalar metrik yer düzlemine
         izdüşürülüp Öklid mesafe alınır (perspektif-tam); yoksa yerel ppm(y)
         ortalamasıyla pikselden metreye çevrilir (Aşama 1-2).
+
+        `use_homography` açıkça verilirse o kaynak zorlanır (Problem 2 çapraz-
+        kontrolü homografi yerine plaka ölçeğine düşmek için False geçer).
         """
+        use_h = (self.homography is not None) if use_homography is None else use_homography
         (x0, y0), (x1, y1) = f0, f1
-        if self.homography is not None:
+        if use_h and self.homography is not None:
             g0 = self.homography.to_ground(x0, y0)
             g1 = self.homography.to_ground(x1, y1)
             if g0 is None or g1 is None:
@@ -263,53 +267,127 @@ class MetricSpeedEstimator:
         ppm = 0.5 * (ppm0 + ppm1)
         return (((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5) / ppm
 
-    def _window_steps(self, track: Track):
-        """Pencere içindeki ardışık kare çiftleri için (dt, anlık_hız_mps) listesi.
+    def _local_ppm_homography(self, x: float, y: float) -> Optional[float]:
+        """Homografinin (x, y) pikselinde ima ettiği yerel ppm (piksel/metre).
 
-        Her adım: yer-temas noktasının iki kare arası metrik yer değiştirmesi /
-        gerçek Δt. Metrik mesafesi/Δt'si geçersiz adımlar atlanır.
-        """
+        1 px yatay ve dikey adımın yer düzleminde kaç metreye karşılık geldiğinden
+        türetilir → işaret-tabanlı homografi ölçeğini, plaka/araç ölçek-alanıyla
+        kıyaslanabilir bir ppm'e çevirir (Problem 2 çapraz-kontrolü)."""
+        if self.homography is None:
+            return None
+        g = self.homography.to_ground(x, y)
+        gx = self.homography.to_ground(x + 1.0, y)
+        gy = self.homography.to_ground(x, y + 1.0)
+        if g is None or gx is None or gy is None:
+            return None
+        dh = ((gx[0] - g[0]) ** 2 + (gx[1] - g[1]) ** 2) ** 0.5     # 1px yatay → m
+        dv = ((gy[0] - g[0]) ** 2 + (gy[1] - g[1]) ** 2) ** 0.5     # 1px dikey → m
+        m_per_px = 0.5 * (dh + dv)
+        return (1.0 / m_per_px) if m_per_px > 1e-9 else None
+
+    def _homography_scale_conflict(self, foot) -> bool:
+        """Problem 2 (§B): homografi ölçeği, işaretten-BAĞIMSIZ plaka/araç ölçek-
+        alanıyla `speed_scale_check_factor` katından fazla ayrışıyor mu?
+
+        Homografi yanlış yol-tipi yüzünden kayabilir (ör. şehir içi 6 m kesik-çizgi
+        adımını otoyol 12 m sanmak → 2× şişme). TR plakası 520 mm bundan bağımsız
+        mutlak çapadır; gross ayrışmada homografiye değil plakaya güveniriz."""
+        if self.homography is None or not self.scale.is_ready:
+            return False
+        x, y = foot
+        ppm_h = self._local_ppm_homography(x, y)
+        ppm_a = self.scale.ppm_at(y)
+        if not ppm_h or not ppm_a or ppm_h <= 0 or ppm_a <= 0:
+            return False
+        factor = getattr(self.s, "speed_scale_check_factor", 1.8)
+        return max(ppm_h, ppm_a) / min(ppm_h, ppm_a) > factor
+
+    def _robust_speed_mps(self, track: Track, use_homography: bool) -> Optional[float]:
+        """Titreme-dayanıklı hız (m/s) — **uzun baz-çizgisi** yaklaşımı.
+
+        Hızı kare-kare anlık hızların medyanından DEĞİL, pencerenin uçtan-uca tek
+        metrik yer değiştirmesinden hesaplar: Δs penceresi büyür, piksel titremesi
+        sabit kalır → jitter/Δs oranı küçülür (kare-kare medyana göre σ=2px'te MAE
+        ~%40 düşük, eval/speed_noise_probe §C).
+
+        Önemli: ivme reddini **anlık** hızlara uygulamayız — jitter'lı anlık hızlar
+        eşiği aşıp temiz pencereyi parçalardı. Yalnız **teleport** (baz-çizginin
+        ≫ üstündeki tekil sıçrama) reddedilir; teleportlar pencereyi böler, en uzun
+        temiz koşunun uçtan-uca yer değiştirmesi alınır (test: teleport reddi)."""
         foots = list(track.foot_history)
         tss = list(track.ts_history)
         window = max(1, getattr(self.s, "speed_window_frames", 6))
-        steps = []
+        pairs = []   # (i, anlık_hız_mps)  — i = sonraki foot indeksi
         for i in range(max(1, len(foots) - window), len(foots)):
             t0, t1 = tss[i - 1], tss[i]
-            if t0 is None or t1 is None:
+            if t0 is None or t1 is None or (t1 - t0) <= 0:
                 continue
-            dt = t1 - t0
-            if dt <= 0:
-                continue
-            meters = self._step_meters(foots[i - 1], foots[i])
+            meters = self._step_meters(foots[i - 1], foots[i], use_homography)
             if meters is None:
                 continue
-            steps.append((dt, meters / dt))
-        return steps
+            pairs.append((i, meters / (t1 - t0)))
+        if not pairs:
+            return None
+
+        def endpoint_speed(a: int, b: int) -> Optional[float]:
+            """a→b foot indeksleri arası uçtan-uca metrik hız (uzun baz-çizgisi)."""
+            m = self._step_meters(foots[a], foots[b], use_homography)
+            dt = tss[b] - tss[a]
+            return (m / dt) if (m is not None and dt > 0) else None
+
+        # Tüm pencere uç-nokta baz-çizgisi (jitter-dayanıklı taban)
+        v_base = endpoint_speed(pairs[0][0] - 1, pairs[-1][0])
+        if v_base is None:
+            v_base = float(np.median([v for _, v in pairs]))
+
+        # Teleport reddi: baz-çizginin ≫ üstündeki tekil sıçramalar (jitter DEĞİL).
+        # Eşik bağıl (3×) + mutlak taban → düşük hızda jitter'ı yanlış işaretlemez.
+        floor = getattr(self.s, "speed_max_accel_mps2", 8.0)
+        thr = max(3.0 * abs(v_base), 3.0 * floor)
+        good = sorted(i for (i, v) in pairs if abs(v) <= thr)
+        if len(good) == len(pairs):
+            return v_base                             # teleport yok → tam pencere baz-çizgisi
+        if not good:
+            return float(np.median([v for _, v in pairs]))
+
+        # Teleport var → en uzun kesintisiz temiz koşunun uçtan-uca baz-çizgisi
+        runs, cur = [], [good[0]]
+        for i in good[1:]:
+            if i == cur[-1] + 1:
+                cur.append(i)
+            else:
+                runs.append(cur)
+                cur = [i]
+        runs.append(cur)
+        best = max(runs, key=len)
+        v = endpoint_speed(best[0] - 1, best[-1])
+        return v if v is not None else v_base
 
     def estimate(self, track: Optional[Track]) -> Tuple[Optional[float], bool]:
         """(km/h, is_calibrated) döndür. Ölçek hazır değilse (None, False).
 
-        Aşama 3: tek-kare yerine **pencere** üzerinden medyan hız + **fiziksel
-        olmayan ivme reddi** (medyandan `speed_max_accel_mps2·Δt`'den fazla sapan
-        adımlar atılır) + track-başı **Kalman** düzgünleştirme (KalmanSpeed1D).
+        Problem 1 (titreme): pencere içi ivme-reddi + en uzun temiz koşunun
+        uçtan-uca tek yer değiştirmesi (uzun baz-çizgisi) + track-başı **Kalman**.
+        Problem 2 (ölçek): homografi, işaretten-bağımsız plaka/araç ölçek-alanıyla
+        gross ayrışırsa (yanlış yol-tipi) homografiyi bırakıp plaka çapasına düşer.
         """
         if track is None:
             return None, False
         # Metrik kaynak gerekli: homografi (B) ya da ppm(y) ölçek-alanı (A) hazır olmalı
         if self.homography is None and not self.scale.is_ready:
             return None, False
-        steps = self._window_steps(track)
-        if not steps:
+
+        use_h = self.homography is not None
+        # Problem 2 — homografi ölçeği plaka çapasıyla çakışıyorsa ona güvenme
+        foot_last = track.foot_history[-1] if len(track.foot_history) else None
+        if use_h and foot_last is not None and self._homography_scale_conflict(foot_last):
+            use_h = False
+
+        v_robust = self._robust_speed_mps(track, use_h)
+        if v_robust is None:
             return None, False
 
-        vs = np.array([v for _, v in steps], dtype=float)
-        med = float(np.median(vs))
-        accel = getattr(self.s, "speed_max_accel_mps2", 8.0)
-        # Aykırı reddi: medyandan fiziksel ivme sınırını aşacak kadar sapan adımlar
-        kept = [v for (dt, v) in steps if abs(v - med) <= accel * max(dt, 1e-3)]
-        v_robust = float(np.median(kept)) if kept else med
-
-        # Kalman filtresi — EMA'nın yerini aldı; titreme daha iyi bastırılır
+        # Kalman filtresi — kareler arası kalan titremeyi bastırır (KalmanSpeed1D)
         q = getattr(self.s, "speed_kalman_q", 3.0)
         r = getattr(self.s, "speed_kalman_r", 8.0)
         tid = track.track_id

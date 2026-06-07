@@ -16,7 +16,12 @@ from collections import deque
 class KalmanSpeed1D:
     """1-D sabit-hız Kalman filtresi — kare-başı hız tahminindeki titremeyi bastırır.
 
-    Durum x (km/h). Q: süreç gürültüsü (araç hızının ne kadar değişebildiği).
+    Durum x = düzgünleştirilmiş hız. Birim, beslenen ölçümün birimidir: metrik
+    yol (MetricSpeedEstimator) m/s besler, sezgisel yol (pipeline) km/h besler.
+    Filtre lineer olduğu ve kazanç dizisi yalnız (P₀, Q, R)'ye bağlı olduğu için
+    düzgünleştirme oranı ölçekten BAĞIMSIZDIR — aynı Q/R her iki birimde de aynı
+    yumuşatmayı verir (bkz. test_kalman_damps_sudden_change).
+    Q: süreç gürültüsü (araç hızının ne kadar değişebildiği).
     R: ölçüm gürültüsü (anlık BEV hız tahmininin güvenilmezliği).
     P=200 başlangıcı → filtre ilk ölçüme hızlı yakınsıyor, sonra Q/R dengesine
     göre ne kadar güncelleneceğini belirliyor.
