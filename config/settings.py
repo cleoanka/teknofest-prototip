@@ -128,7 +128,11 @@ class Settings(BaseSettings):
     # yüksek eşik yüzü/eli hiç bulamıyordu (recall darboğazı). Düşürmek recall'ı artırır.
     driver_hand_conf: float = Field(default=0.3)           # Hands min algılama/takip güveni
     driver_face_conf: float = Field(default=0.3)           # FaceMesh min algılama/takip güveni
-    driver_phone_ear_ratio: float = Field(default=0.60)    # el-kulak < 0.60×yüz_gen → telefon adayı
+    # el-kulak < ratio×yüz_gen → telefon adayı. ÖLÇÜM (sweep): gerçek telefonda el
+    # kulağa ÇOK yakın (video_2 d_ear %99'u <0.40×fw), FP'de dağınık (video_1 %53).
+    # 0.60→0.40: video_1 telefon FP %13→%0 silinir, video_2 %61 korunur. 0.40 altı
+    # ek fayda yok; 0.25 video_2'yi düşürmeye başlar → 0.40 doğrulanmış eşik.
+    driver_phone_ear_ratio: float = Field(default=0.40)
     driver_smoke_mouth_ratio: float = Field(default=0.45)  # parmak-ağız < 0.45×yüz_gen → sigara adayı
     driver_state_window: int = Field(default=15)           # sürdürme/tekrar penceresi (kare) ~0.5sn@30fps
     driver_phone_sustain: int = Field(default=5)           # pencerede ≥N kare el-kulakta → phone_use teyit
@@ -153,7 +157,17 @@ class Settings(BaseSettings):
     # NATIVE (büyütme öncesi) yüz genişliği bu px'in altındaysa araç UZAK/yüz KÜÇÜK
     # demektir → el-parmak landmark'ları gürültülü → telefon/sigara geometrisi BASTIRILIR
     # (uzak mesafe yanlış pozitifini önler). Tek videoya özel değil, genel ilke.
-    driver_min_face_px: int = Field(default=45)
+    # ÖLÇÜM (grid): 45→30 video_1 sigara recall %32→%59'a çıkar; video_2/video_3
+    # sigara %0 kalır (FP yok), telefon/yorgunluk bozulmaz. 30 altı ek fayda vermez
+    # (kalan tavan el algılama). Bu yüzden 30 = doğrulanmış tatlı nokta.
+    driver_min_face_px: int = Field(default=30)
+    # Yüz konum cache'i: dış sabit kamerada FaceMesh kareleri seyrek yakalar
+    # (ölçüm: video_1 yüz %30, el %54). Kafa direksiyon başında ~sabit olduğundan
+    # son bilinen ağız/kulak konumu (normalize) N kare saklanır; yüz kaybolduğu ama
+    # ELİN bulunduğu karelerde sigara/telefon geometrisi yine de hesaplanır → recall
+    # tavanı %30'dan el oranına (%54) doğru açılır. Göreli (ağız-vs-kulak) test +
+    # sustain + latch FP'yi frenler. ~3 sn @10fps. 0 = kapalı (yalnız gerçek yüz).
+    driver_face_cache_frames: int = Field(default=30)
     # Parlak-piksel CV sigara yedeği: ağız üstü ince parlak nesne arar. Gerçek
     # footage'ta (ön cam yansıması, far, kontrast) yanlış pozitifi yüksek →
     # varsayılan KAPALI. Asıl sigara sinyali el-parmak↔ağız geometrisi.

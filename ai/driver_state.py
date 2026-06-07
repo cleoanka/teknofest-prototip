@@ -73,6 +73,8 @@ class DriverMonitor:
         self._smoke_hist = deque(maxlen=win)
         self._headphone_hist = deque(maxlen=win)
         self._latch = {}   # {'phone': kalan_kare, 'smoke': ...} — süregelen davranış kilidi
+        self._face_cache = None   # (geom_norm, kalan_kare) — yüz kaybolunca son konumu kısa süre kullan
+        self._box_cache = {}      # {'phone': (BBox, kalan_kare), 'smoke': ...} — kutu latch ile senkron
         if self.mode == "real":
             try:
                 import mediapipe as mp
@@ -139,19 +141,21 @@ class DriverMonitor:
         """
         Sürücü ROI crop'unu BİR kez FaceMesh ve Hands'ten geçirir.
 
-        Dönüş: (face_lm, hands_px, roi_gray, rh, rw, scale)
+        Dönüş: (face_lm, hands_px, roi_gray, rh, rw, scale, ox, oy)
           face_lm  : ilk yüzün landmark listesi (normalize, 0..1) | None
           hands_px : her el için [(x,y), ...] ROI-piksel koordinatları (liste)
           roi_gray : ROI'nin gri tonu (parlak-piksel sigara yedeği için) | None
           rh, rw   : ROI yükseklik/genişlik (px, büyütme SONRASI)
           scale    : uygulanan büyütme oranı (native yüz boyutunu geri hesaplamak için)
+          ox, oy   : ROI'nin tam-karedeki sol-üst ofseti (px). ROI-px → tam-kare:
+                     x_full = x_roi/scale + ox  (kutu görselleştirme/çıktı için).
         Önceki kod FaceMesh'i yorgunluk + sigara için AYRI AYRI işliyordu; burada
         tek process ile ~2× MediaPipe maliyeti kazanılır.
         """
         try:
             import cv2
         except Exception:
-            return None, [], None, 0, 0, 1.0
+            return None, [], None, 0, 0, 1.0, 0, 0
 
         h, w = frame.shape[:2]
         if driver_roi:
@@ -159,9 +163,10 @@ class DriverMonitor:
             x2, y2 = min(w, int(driver_roi.x2)), min(h, int(driver_roi.y2))
             roi = frame[y1:y2, x1:x2]
         else:
+            x1 = y1 = 0
             roi = frame
         if roi.size == 0:
-            return None, [], None, 0, 0, 1.0
+            return None, [], None, 0, 0, 1.0, 0, 0
 
         # ── Ön-işleme: dış kamerada sürücü uzak+karanlık → büyüt + parlat ──
         roi, scale = self._prep_roi(roi, cv2)
@@ -183,7 +188,7 @@ class DriverMonitor:
                 for hand in hres.multi_hand_landmarks:
                     hands_px.append([(lm.x * rw, lm.y * rh) for lm in hand.landmark])
 
-        return face_lm, hands_px, roi_gray, rh, rw, scale
+        return face_lm, hands_px, roi_gray, rh, rw, scale, x1, y1
 
     # ── Yorgunluk: paylaşılan yüz landmark'larından EAR/PERCLOS ──
     def _fatigue_from_face(self, face_lm, rh: int, rw: int) -> Tuple[Optional[float], float, bool]:
@@ -211,40 +216,88 @@ class DriverMonitor:
         perclos = self._perclos()
         return ear, perclos, perclos > PERCLOS_FATIGUE
 
+    @staticmethod
+    def _face_geom_norm(face_lm):
+        """
+        Yüz landmark'larından NORMALİZE (0..1) geometri çıkarır: (pr, pl, mouth).
+          pr, pl : yüz yan-konturu (234 sağ, 454 sol) — genişlik/kulak yaklaşığı
+          mouth  : üst+alt dudak ortası
+        Normalize saklanır → ROI boyu (büyütme) değişse de cache geçerli kalır.
+        Yüz yoksa None.
+        """
+        if face_lm is None:
+            return None
+        pr = (face_lm[_FACE_SIDE_R].x, face_lm[_FACE_SIDE_R].y)
+        pl = (face_lm[_FACE_SIDE_L].x, face_lm[_FACE_SIDE_L].y)
+        mu, ml = face_lm[_MOUTH_UPPER], face_lm[_MOUTH_LOWER]
+        mouth = ((mu.x + ml.x) / 2, (mu.y + ml.y) / 2)
+        return pr, pl, mouth
+
+    @staticmethod
+    def _hand_box(hand):
+        """El landmark'larından sınırlayıcı kutu (ROI-px): (minx, miny, maxx, maxy)."""
+        xs = [p[0] for p in hand]; ys = [p[1] for p in hand]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    @staticmethod
+    def _roi_box_to_full(box, scale: float, ox: int, oy: int, pad: float = 0.15) -> BBox:
+        """ROI-px kutusunu TAM-KARE BBox'a çevirir (büyütmeyi geri al + ofset ekle).
+        pad: kutuyu biraz genişletir (el + nesne görsel olarak rahat sığsın)."""
+        x1, y1, x2, y2 = box
+        sc = max(scale, 1e-6)
+        fx1 = x1 / sc + ox; fy1 = y1 / sc + oy
+        fx2 = x2 / sc + ox; fy2 = y2 / sc + oy
+        bw = (fx2 - fx1) * pad; bh = (fy2 - fy1) * pad
+        return BBox(x1=fx1 - bw, y1=fy1 - bh, x2=fx2 + bw, y2=fy2 + bh)
+
+    def _box_latch(self, key: str, box_full, active: bool):
+        """Kutuyu latch ile senkron tutar: yeni kutu varsa tazele; yoksa flag açık
+        kaldığı sürece son kutuyu kullan. Dönüş: o an gösterilecek BBox | None."""
+        n = self.s.driver_latch_frames
+        if box_full is not None:
+            self._box_cache[key] = (box_full, max(n, 1))
+            return box_full
+        cached = self._box_cache.get(key)
+        if active and cached is not None and cached[1] > 0:
+            self._box_cache[key] = (cached[0], cached[1] - 1)
+            return cached[0]
+        return None
+
     # ── Telefon / sigara / kulaklık: el-yüz geometrisi ──
-    def _detect_phone_smoke(self, face_lm, hands_px, rh: int, rw: int,
-                            scale: float = 1.0) -> Tuple[bool, bool, bool]:
+    def _detect_phone_smoke(self, geom_px, hands_px, scale: float = 1.0):
         """
         Bu KARE için aday tespitleri döndürür (sürdürme teyidi assess'te yapılır):
           phone_cand : el (herhangi nokta) kulağa, yüz-genişliğinin oranından yakınsa
           smoke_cand : parmak ucu ağıza, yüz-genişliğinin oranından yakınsa
           hand_at_ear: kulaklık sezgisi için ham "el kulakta" sinyali
+          phone_box  : telefonu tetikleyen elin kutusu (ROI-px) | None
+          smoke_box  : sigarayı tetikleyen elin kutusu (ROI-px) | None
 
-        Yüz yoksa hiçbir şey karşılaştırılamaz (referans/ölçek yok) → hepsi False.
+        geom_px = (pr, pl, mouth) — PİKSEL koordinatlarında yüz yan-konturu + ağız.
+        Gerçek yüzden YA DA kısa süreli yüz cache'inden gelir (assess kurar). Cache
+        sayesinde yüz kaybolsa da elin bulunduğu karelerde geometri hesaplanabilir.
+        Geometri/yüz yoksa karşılaştırma referansı yok → hepsi False.
         """
-        if face_lm is None or not hands_px:
-            return False, False, False
+        if geom_px is None or not hands_px:
+            return False, False, False, None, None
 
-        # Yüz genişliği = ölçek referansı (px). Yan kontur 234↔454 arası.
-        pr = (face_lm[_FACE_SIDE_R].x * rw, face_lm[_FACE_SIDE_R].y * rh)
-        pl = (face_lm[_FACE_SIDE_L].x * rw, face_lm[_FACE_SIDE_L].y * rh)
+        pr, pl, mouth = geom_px
         face_w = _dist(pr, pl)
         if face_w < 1e-3:
-            return False, False, False
+            return False, False, False, None, None
 
         # Uzak/küçük yüz kapısı: native (büyütme öncesi) yüz genişliği eşiğin
         # altındaysa el-parmak landmark'ları gürültülü → güvenilmez, bastır.
         if (face_w / max(scale, 1e-6)) < self.s.driver_min_face_px:
-            return False, False, False
+            return False, False, False, None, None
 
         ears = [pr, pl]  # kulak/yan-yüz yaklaşığı
-        mu, ml = face_lm[_MOUTH_UPPER], face_lm[_MOUTH_LOWER]
-        mouth = ((mu.x + ml.x) / 2 * rw, (mu.y + ml.y) / 2 * rh)
 
         phone_thr = self.s.driver_phone_ear_ratio * face_w
         smoke_thr = self.s.driver_smoke_mouth_ratio * face_w
 
         phone_cand = smoke_cand = hand_at_ear = False
+        phone_box = smoke_box = None
         for hand in hands_px:
             d_ear = min(_dist(pt, e) for pt in hand for e in ears)
             tips = [hand[i] for i in _FINGERTIPS if i < len(hand)]
@@ -256,10 +309,12 @@ class DriverMonitor:
             # (ölçüm: R_rel → video_1 %13 yakalar, video_2'de telefon sigaraya karışmaz).
             if d_mouth < smoke_thr and d_mouth <= d_ear:
                 smoke_cand = True            # parmak ağızda (kulaktan yakın) → sigara
+                smoke_box = self._hand_box(hand)
             elif d_ear < phone_thr and d_ear < d_mouth:
                 phone_cand = True            # el kulakta (ağızdan yakın) → telefon
                 hand_at_ear = True
-        return phone_cand, smoke_cand, hand_at_ear
+                phone_box = self._hand_box(hand)
+        return phone_cand, smoke_cand, hand_at_ear, phone_box, smoke_box
 
     def _detect_smoking_brightpixel(self, roi_gray: np.ndarray, face_lm, rh: int, rw: int) -> bool:
         """
@@ -384,24 +439,47 @@ class DriverMonitor:
             # COCO'da emniyet kemeri sınıfı yok; fine-tune gelene kadar devre dışı
             state.no_seatbelt = False
 
+        # Tetikleyen el kutuları (tam-kare) — real branch'te doldurulur, latch'te kullanılır
+        phone_box_full = smoke_box_full = None
+
         # ── 2) MediaPipe geometri yolu (telefon/sigara/kulaklık) — yalnız kritik+real ──
         # Tüm MediaPipe analizi TEK kare işlemeyle yapılır; sonuçlar paylaşılır.
         if profile == "critical" and frame is not None and frame.size:
             if self.mode == "real":
-                face_lm, hands_px, roi_gray, rh, rw, scale = self._process_real(frame, droi)
+                face_lm, hands_px, roi_gray, rh, rw, scale, ox, oy = self._process_real(frame, droi)
 
                 # Yorgunluk (paylaşılan yüz landmark'ı)
                 ear, perclos, fatigue = self._fatigue_from_face(face_lm, rh, rw)
                 state.ear, state.perclos, state.fatigue = ear, perclos, fatigue
 
-                # Telefon / sigara adayları (bu kare)
-                phone_cand, smoke_cand, hand_at_ear = self._detect_phone_smoke(
-                    face_lm, hands_px, rh, rw, scale)
+                # Yüz geometrisi: gerçek yüz varsa cache'i tazele; yoksa kısa süre
+                # son bilinen konumu kullan (dış kamerada yüz seyrek, el sık bulunur).
+                geom_norm = self._face_geom_norm(face_lm)
+                if geom_norm is not None:
+                    self._face_cache = (geom_norm, self.s.driver_face_cache_frames)
+                elif self._face_cache is not None and self._face_cache[1] > 0:
+                    geom_norm = self._face_cache[0]
+                    self._face_cache = (geom_norm, self._face_cache[1] - 1)
+                geom_px = None
+                if geom_norm is not None and rw and rh:
+                    (prx, pry), (plx, ply), (mxn, myn) = geom_norm
+                    geom_px = ((prx * rw, pry * rh), (plx * rw, ply * rh),
+                               (mxn * rw, myn * rh))
+
+                # Telefon / sigara adayları (bu kare) + tetikleyen el kutuları (ROI-px)
+                phone_cand, smoke_cand, hand_at_ear, phone_box, smoke_box = \
+                    self._detect_phone_smoke(geom_px, hands_px, scale)
                 # Sigara CV yedeği (opsiyonel, varsayılan kapalı — gerçek footage'ta FP yüksek):
                 # el kadrajda olmasa da ağız üstü ince nesne. Telefon adayı varken çalıştırma.
                 if (self.s.driver_smoke_brightpixel
                         and not smoke_cand and not phone_cand):
                     smoke_cand = self._detect_smoking_brightpixel(roi_gray, face_lm, rh, rw)
+
+                # Tetikleyen el kutularını TAM-KARE koordinata çevir (görsel + çıktı)
+                if phone_box is not None:
+                    phone_box_full = self._roi_box_to_full(phone_box, scale, ox, oy)
+                if smoke_box is not None:
+                    smoke_box_full = self._roi_box_to_full(smoke_box, scale, ox, oy)
 
                 # Sürdürme/tekrar penceresi → gürültüyü ele (anlık tek-kare false positive'i bastırır)
                 self._phone_hist.append(1 if phone_cand else 0)
@@ -425,5 +503,11 @@ class DriverMonitor:
         # Latch — telefon/sigara süregelen davranış: teyit sonrası bayrağı basılı tut
         state.phone_use = self._latch_flag("phone", state.phone_use)
         state.smoking = self._latch_flag("smoke", state.smoking)
+
+        # Kutuyu bayrakla senkron yayınla: bayrak açıkken son tetikleyen el kutusu
+        pb = self._box_latch("phone", phone_box_full, state.phone_use)
+        sb = self._box_latch("smoke", smoke_box_full, state.smoking)
+        state.phone_bbox = pb if state.phone_use else None
+        state.cigarette_bbox = sb if state.smoking else None
 
         return state
