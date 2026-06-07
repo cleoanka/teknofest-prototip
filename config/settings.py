@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Dict
+from typing import Dict, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -267,6 +267,19 @@ class Settings(BaseSettings):
     # Aşama 4 — otomatik şerit homografisi (best-effort; VARSAYILAN KAPALI, cv2 ister)
     homography_auto: bool = Field(default=False)            # açıksa kareden şerit→homografi dene
     homography_calib_interval: int = Field(default=30)      # her N karede bir kalibrasyon denemesi
+    # ── Plaka düzlemsel PnP (Katman 2 — foreshortening-bağımsız ölçek) ──────────
+    # 4 plaka köşesi + bilinen 520×112 mm + odak uzaklığından plakanın metrik
+    # derinliğini (Z) ve açısını çöz; eğik plakada bile doğru ppm = focal/Z üretir.
+    # plate_corners (perspektif düzeltme) varsa observe_plate yerine bu kullanılır.
+    plate_pnp_enabled: bool = Field(default=True)
+    # Kamera odağı (px). None → yatay FOV varsayımından kare genişliğiyle tahmin edilir.
+    camera_focal_px: Optional[float] = Field(default=None)
+    camera_hfov_deg: float = Field(default=55.0)            # focal tahmini için tipik trafik kamerası HFOV
+    plate_pnp_weight: float = Field(default=1.2)            # PnP ppm örnek ağırlığı (düz plaka=1.0'dan yüksek: açıdan bağımsız)
+    plate_pnp_max_reproj_px: float = Field(default=6.0)    # köşe geri-izdüşüm RMS hatası üst sınırı (güven geçidi)
+    plate_pnp_min_distance_m: float = Field(default=1.0)   # makul mesafe alt sınırı
+    plate_pnp_max_distance_m: float = Field(default=120.0) # makul mesafe üst sınırı
+    plate_pnp_max_tilt_deg: float = Field(default=60.0)    # bu açının üstündeki plaka pozu güvenilmez sayılır
 
     # Sunucu
     host: str = Field(default="0.0.0.0")

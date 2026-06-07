@@ -447,7 +447,13 @@ class Pipeline:
         # eksik genişlik) ScaleField'i (ppm(y) eğrisi) kirletmesin (radar/ANPR mantığı).
         if vehicle.plate_bbox is not None and not _near_frame_edge(
                 vehicle.plate_bbox, w, h, self.s.speed_edge_margin_pct):
-            self.speed_estimator.observe_plate(vehicle.plate_bbox)
+            # Katman 2 öncelikli: 4 köşe varsa düzlemsel PnP ile foreshortening-bağımsız
+            # ppm (focal/Z). Pose çıkmazsa (köşe yok / geometri tutarsız) bbox-genişliği
+            # tabanlı plate_ppm'e düş. Çift sayım olmasın diye yalnız biri çalışır.
+            used_pose = self.speed_estimator.observe_plate_pose(
+                vehicle.plate_corners, w, h)
+            if not used_pose:
+                self.speed_estimator.observe_plate(vehicle.plate_bbox)
         for d in veh_dets:
             if not _near_frame_edge(d.bbox, w, h, self.s.speed_edge_margin_pct):
                 self.speed_estimator.observe_vehicle(d.bbox, d.attributes.get("vtype"))
