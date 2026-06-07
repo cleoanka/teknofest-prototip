@@ -253,6 +253,7 @@ class Settings(BaseSettings):
     speed_ema_alpha: float = Field(default=0.4)             # EMA alfa (geriye uyum; Kalman Q/R tercih edilir)
     speed_kalman_q: float = Field(default=3.0)              # Kalman süreç gürültüsü (hız değişim hızı)
     speed_kalman_r: float = Field(default=8.0)              # Kalman ölçüm gürültüsü (BEV hız belirsizliği)
+    speed_scale_check_factor: float = Field(default=1.8)    # homografi↔plaka ölçek ayrışma eşiği (Problem 2: yol-tipi çapraz-kontrolü)
     speed_metric_max_kmh: float = Field(default=200.0)      # akıl sağlığı üst sınırı
     # Radar/ANPR mantığı: araç kadraj kenarına değdiğinde (kırpılma + homografi
     # ekstrapolasyonu nedeniyle ölçüm güvenilmez) o kare için hız hesaplanmaz;
