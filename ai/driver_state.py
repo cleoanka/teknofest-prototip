@@ -88,6 +88,11 @@ class DriverMonitor:
         self._latch = {}   # {'phone': kalan_kare, 'smoke': ...} — süregelen davranış kilidi
         self._face_cache = None   # (geom_norm, kalan_kare) — yüz kaybolunca son konumu kısa süre kullan
         self._box_cache = {}      # {'phone': (BBox, kalan_kare), 'smoke': ...} — kutu latch ile senkron
+        # ── Sürücü kimlik kilidi (vehicle_id → durum) ──
+        self._driver_lock = {}     # vid → kilitli person track_id
+        self._driver_cand = {}     # vid → [aday person id, ardışık kare sayımı]
+        self._driver_miss = {}     # vid → kilitli sürücü kaç karedir kayıp (TTL sayacı)
+        self._driver_last_box = {} # vid → son bilinen sürücü kutusu (geçici kayıpta ROI tut)
         if self.mode == "real":
             try:
                 import mediapipe as mp
@@ -412,12 +417,16 @@ class DriverMonitor:
         return (outer.x1 <= inner.cx <= outer.x2) and (outer.y1 <= inner.cy <= outer.y2)
 
     def select_rois(self, detections: List[Detection], vehicle_bbox: Optional[BBox],
-                    frame_shape) -> Tuple[Optional[BBox], List[BBox], bool]:
+                    frame_shape, vehicle_id: Optional[int] = None
+                    ) -> Tuple[Optional[BBox], List[BBox], bool]:
         """
-        Kişi-bazlı sürücü/yolcu ayrımı.
+        Kişi-bazlı sürücü/yolcu ayrımı + KİMLİK KİLİDİ.
 
         Araç kabinindeki 'person' tespitleri arasından KAMERANIN BAKIŞ AÇISINA göre
-        EN SAĞ-ALTTAKİ kişiyi sürücü seçer; kalan kişiler yolcudur.
+        EN SAĞ-ALTTAKİ kişiyi sürücü seçer; kalan kişiler yolcudur. Aynı kişi
+        driver_lock_frames ardışık karede sürücü seçilirse o kişiye (ByteTrack
+        track_id) KİLİTLENİR → araç yarı kadraj dışına çıksa bile sürücü arka
+        koltuğa atlamaz (bkz. _resolve_driver, driver_lock_*).
 
         Dönüş: (driver_box, passenger_boxes, driver_is_person)
           driver_box        : sürücü ROI'si (kişi kutusu; yoksa geometrik sağ-yarı)
@@ -433,7 +442,7 @@ class DriverMonitor:
         if not getattr(self.s, "driver_person_select", True):
             return self.driver_roi(vehicle_bbox, frame_shape), [], False
 
-        persons = [d.bbox for d in detections
+        persons = [d for d in detections
                    if d.label == "person" and self._center_in(d.bbox, vehicle_bbox)]
         if not persons:
             # Kişi yok → eski geometrik davranış (güvenli yedek)
@@ -444,13 +453,81 @@ class DriverMonitor:
         rw = float(getattr(self.s, "driver_select_right_weight", 1.0))
         bw = float(getattr(self.s, "driver_select_bottom_weight", 1.0))
 
-        def bottom_right_score(b: BBox) -> float:
+        def bottom_right_score(d: Detection) -> float:
             # Kutunun SAĞ-ALT köşesi (x2,y2) ne kadar sağ-altta → o kadar yüksek skor
-            return rw * (b.x2 / W) + bw * (b.y2 / H)
+            return rw * (d.bbox.x2 / W) + bw * (d.bbox.y2 / H)
 
-        driver = max(persons, key=bottom_right_score)
-        passengers = [b for b in persons if b is not driver]
-        return driver, passengers, True
+        br = max(persons, key=bottom_right_score)
+        driver = self._resolve_driver(vehicle_id, persons, br)
+
+        if driver is None:
+            # Kilitli sürücü geçici kayıp (TTL içinde) → KİMSEYİ sürücü yapma; davranış
+            # bayraklarını latch tutar. ROI'yi son bilinen sürücü kutusunda tut ki
+            # MediaPipe boş bölgeye baksın, bir yolcuyu sürücü sanmasın.
+            vid = vehicle_id if vehicle_id is not None else -1
+            last = self._driver_last_box.get(vid)
+            return last, [d.bbox for d in persons], (last is not None)
+
+        self._remember_driver_box(vehicle_id, driver.bbox)
+        passengers = [d.bbox for d in persons if d is not driver]
+        return driver.bbox, passengers, True
+
+    def _resolve_driver(self, vehicle_id: Optional[int], persons: List[Detection],
+                        br: Detection) -> Optional[Detection]:
+        """
+        Kimlik kilidi makinesi. Döndürür:
+          Detection → bu karenin sürücüsü (kilitli kişi mevcutsa o; değilse sağ-alt aday)
+          None      → kilitli sürücü geçici kayıp (TTL içinde): kimseyi sürücü yapma
+
+        person track_id yoksa (mock / takipçi kapalı) kilit kurulamaz → saf sağ-alt.
+        """
+        if not getattr(self.s, "driver_lock_enable", True):
+            return br
+
+        vid = vehicle_id if vehicle_id is not None else -1
+        by_id = {d.track_id: d for d in persons if d.track_id is not None}
+
+        locked = self._driver_lock.get(vid)
+        if locked is not None:
+            if locked in by_id:
+                self._driver_miss[vid] = 0
+                return by_id[locked]                 # kilitli sürücü mevcut → HEP o
+            # Kilitli sürücü bu karede yok (araç yarı çıktı / occlusion)
+            miss = self._driver_miss.get(vid, 0) + 1
+            self._driver_miss[vid] = miss
+            if miss <= self.s.driver_lock_ttl:
+                return None                          # bekle — sürücüyü başkasına verme
+            # TTL doldu → kilidi bırak ve aşağıda yeniden edin
+            for d in (self._driver_lock, self._driver_cand,
+                      self._driver_miss, self._driver_last_box):
+                d.pop(vid, None)
+
+        # Kilit yok → sağ-alt adayı say (yalnız izlenebilir id varsa kilitlenebilir)
+        brid = br.track_id
+        if brid is None:
+            return br
+        cand = self._driver_cand.get(vid)
+        if cand and cand[0] == brid:
+            cand[1] += 1
+        else:
+            self._driver_cand[vid] = [brid, 1]
+        if self._driver_cand[vid][1] >= self.s.driver_lock_frames:
+            self._driver_lock[vid] = brid
+            self._driver_miss[vid] = 0
+        return br
+
+    def _remember_driver_box(self, vehicle_id: Optional[int], box: BBox) -> None:
+        vid = vehicle_id if vehicle_id is not None else -1
+        self._driver_last_box[vid] = box
+
+    def prune_locks(self, alive_vehicle_ids) -> None:
+        """Sahnede olmayan araçların sürücü-kilidi durumunu temizle (bellek)."""
+        keep = set(alive_vehicle_ids)
+        keep.add(-1)   # vehicle_id=None tek-slotu daima korunur
+        for store in (self._driver_lock, self._driver_cand,
+                      self._driver_miss, self._driver_last_box):
+            for k in [k for k in store if k not in keep]:
+                del store[k]
 
     def _latch_flag(self, key: str, active: bool) -> bool:
         """
