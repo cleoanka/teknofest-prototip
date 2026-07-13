@@ -392,7 +392,7 @@ Raporda kullanmak üzere şu ekran görüntülerini al:
 3. **Web konsolu — Kritik mod** → KRİTİK rozetli, kırmızı çerçeve
 4. **Olay listesi** → `/api/events` API cevabı
 5. **QoD durum** → `/api/qod/status` — bandwidth_efficiency değeri
-6. **Test koşusu** → `make test` terminal çıktısı (38 test geçiyor)
+6. **Test koşusu** → `make test` terminal çıktısı (358 test geçiyor)
 7. **Eval raporu** → `make eval` çıktısı
 
 ---
