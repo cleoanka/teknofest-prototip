@@ -2,11 +2,13 @@
 
 **TEKNOFEST 2026 · 5G & Yapay Zeka ile Akıllı Yol Güvenliği Yarışması (Turkcell)**
 
+> ⚠️ **Bu v1 prototiptir; geliştirme [v2](https://github.com/cleoanka/teknofest-prototip.v2) ile devam ediyor.**
+
+![CI](https://github.com/cleoanka/teknofest-prototip/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
 ![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-purple)
 ![React Native](https://img.shields.io/badge/React%20Native-Expo-61DAFB?logo=react&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-308%20geçiyor-brightgreen)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![GPU](https://img.shields.io/badge/GPU-CUDA%20%7C%20MPS%20%7C%20CPU-green)
 ![5G](https://img.shields.io/badge/5G-CAMARA%20QoD-red)
@@ -62,7 +64,7 @@ Normal → Tehlike Tespit → 5G QoD API → Bant 5→20 Mbps → Kritik Analiz 
 |--------|---------|-----------|
 | YZ doğruluğu (araç, plaka, hız, araç içi nesne) | **%40** | `ai/pipeline.py` — YOLOv8 + YOLO11n plaka + OCR + MediaPipe + risk |
 | 5G QoD — **yalnız ihtiyaç anında** bant yükseltme | **%40** | `ai/qod_trigger.py` (A–E koşul motoru) + `backend/qod_manager.py` · ~%43 bant tasarrufu ✓ |
-| Mimari & modern pratikler | **%20** | Katmanlı mimari, tip-güvenli şema, **308 test**, `ARCHITECTURE.md` |
+| Mimari & modern pratikler | **%20** | Katmanlı mimari, tip-güvenli şema, **358 test**, `ARCHITECTURE.md` |
 
 ---
 
@@ -121,18 +123,19 @@ npx expo start        # QR kodu telefonla okut (Expo Go uygulaması gerekli)
 ### 3 — Testler & Değerlendirme
 
 ```bash
-make test             # 308 pytest testi (model gerektirmez, mock modda çalışır)
+make test             # 358 pytest testi (model gerektirmez, mock modda çalışır)
 make eval             # sentetik veri + Normal/Kritik doğruluk raporu
 ```
 
 ---
 
-## Mevcut Durum (2026-06-07)
+## Mevcut Durum (2026-07-13)
 
 | Bileşen | Durum |
 |---------|-------|
 | YZ hattı (detector, tracking, speed, plate_ocr, driver_state, risk, qod_trigger, pipeline) | ✅ Hazır |
-| Mock modda uçtan uca çalışma | ✅ **308 test yeşil** |
+| Mock modda uçtan uca çalışma | ✅ **358 test yeşil** |
+| Tip-ayrımlı **v4 model** (`yolguvenligi_types_v4.pt`, yolov8m@768, test mAP50 .788) | ✅ Varsayılan CRITICAL model |
 | Windows + CUDA doğrulaması (RTX 4070 Laptop) | ✅ Tamamlandı |
 | Gerçek YOLOv8 GPU çıkarımı (**72.7 FPS** yolov8n, RTX 4070) | ✅ Tamamlandı |
 | Eğitim/veri araçları (`prepare_dataset`, `train`, `fetch_data`) | ✅ Hazır |
@@ -229,7 +232,7 @@ teknofest-prototip/
 │   ├── camera_client.py     Masaüstü kamera istemcisi
 │   └── smoke_real_model.py  Gerçek model duman testi
 │
-├── tests/               ✅ 308 pytest testi (27 dosya, mock modda çalışır)
+├── tests/               ✅ 358 pytest testi (33 dosya, mock modda çalışır)
 ├── eval/                📊 Doğruluk değerlendirmesi
 │   ├── evaluate.py          Normal vs Kritik + bant verimliliği
 │   └── real_smoke.py        Gerçek-mod pipeline duman testi
@@ -312,7 +315,7 @@ Swagger UI: [`http://localhost:8000/docs`](http://localhost:8000/docs)
 # Sistem
 ./run_dev.sh              # Tam sistem başlat (macOS/Linux)
 .\run_dev.ps1             # Tam sistem başlat (Windows)
-make test                 # 248 testi çalıştır
+make test                 # 358 testi çalıştır
 make eval                 # Normal vs Kritik doğruluk raporu
 make mock                 # Sentetik test videosu üret
 make clean                # venv + cache + db temizle
