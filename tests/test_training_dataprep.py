@@ -5,7 +5,6 @@ Plan.md Bölüm 5 (dönüştürme), 4.1 (sınıf dengesi), 11 (sızıntı riski)
 vurgulanan "data.yaml ↔ TARGET_CLASSES tutarlılığı" için saf-mantık testleri.
 Hepsi çevrimdışı: gerçek görüntü, indirme veya GPU gerektirmez (K4).
 """
-import json
 
 from ai.training.prepare_dataset import (
     coco_to_yolo,

@@ -1,5 +1,4 @@
 """v1.5 testleri: CORS expose_headers, /api/system/info, qod/sessions/{sid}, export plate."""
-import pytest
 import time
 from ai.schema import EventRecord
 

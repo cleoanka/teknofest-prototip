@@ -16,7 +16,7 @@ Bağımlılık: yalnız numpy. Saf geometri — her ortamda test edilebilir.
 """
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 

@@ -1,6 +1,5 @@
 """Plate filtresi, bulk delete, demo-token ve timeline testleri."""
 import time
-import pytest
 from ai.schema import EventRecord
 
 

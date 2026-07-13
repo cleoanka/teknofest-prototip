@@ -20,7 +20,6 @@ import os
 from typing import Optional
 
 import cv2
-import numpy as np
 
 os.environ.setdefault("AI_MODE", "real")
 

@@ -21,12 +21,12 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from ai.schema import FrameResult, Vehicle, Detection, BBox, PlateResult
+from ai.schema import FrameResult, Vehicle, BBox, PlateResult
 from ai.detector import build_detector, BaseDetector
 from ai.tracking import IOUTracker, KalmanSpeed1D
 from ai.plate_ocr import PlateReader
 from ai.lp_detector import get_lp_detector
-from ai.plate_crop import looks_like_plate, refine_to_frame, plate_sharpness, refine_with_corners
+from ai.plate_crop import looks_like_plate, plate_sharpness, refine_with_corners
 from ai.plate_tracker import PlateTracker
 from ai.driver_state import DriverMonitor
 from ai.speed import estimate_speed

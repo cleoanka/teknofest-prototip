@@ -13,12 +13,11 @@ from __future__ import annotations
 import glob
 import json
 import os
-from typing import List, Optional
+from typing import List
 
 import numpy as np
 
 from ai.pipeline import Pipeline
-from ai.qod_trigger import QoDTriggerEngine
 from backend.qod_manager import QoDManager
 from config.settings import get_settings
 

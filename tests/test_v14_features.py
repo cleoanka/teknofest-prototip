@@ -1,6 +1,4 @@
 """v1.4 özellik testleri: /api/health/deep, X-Response-Time, WS token auth, JSON logging, OpenAPI."""
-import time
-import pytest
 
 
 # ── /api/health/deep ──────────────────────────────────────────────────────────

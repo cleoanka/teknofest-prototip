@@ -1,6 +1,5 @@
 """GZip sıkıştırma, güvenlik başlıkları, X-Request-ID, /api/qod/proof ve pagination offset testleri."""
 import time
-import pytest
 from ai.schema import EventRecord
 
 
@@ -47,7 +46,6 @@ def test_security_headers_on_post(client):
 
 def test_gzip_accepted_header(client):
     """Accept-Encoding: gzip başlığıyla büyük yanıtlar sıkıştırılabilir."""
-    from backend.db import EventStore
     store_fixture = client.app.state
     # Birden fazla olay oluştur
     for i in range(20):
