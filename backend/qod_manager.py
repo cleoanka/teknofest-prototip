@@ -40,7 +40,8 @@ class QoDManager:
         decision = self.engine.evaluate(ctx, dt_s=dt_s)
 
         if decision.fired_this_cycle:
-            sess = self.provider.create_session(
+            # Oturum kimliği provider içinde tutulur (active_session_id); dönüş kullanılmıyor.
+            self.provider.create_session(
                 device=self.device,
                 qos_profile="QOS_S_HIGH_THROUGHPUT",
                 duration_s=self.s.qod_max_session_s,
