@@ -1,6 +1,5 @@
 """JWT RS256 kimlik doğrulama testleri."""
 import time
-import pytest
 import jwt as pyjwt
 
 from backend.auth import get_jwt_manager, JWTManager

@@ -26,9 +26,8 @@ import shutil
 import sys
 import time
 import urllib.request
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Set
 
 from config.settings import TARGET_CLASSES
 from ai.training.prepare_dataset import coco_to_yolo, write_yolo_labels

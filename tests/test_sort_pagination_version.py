@@ -1,6 +1,5 @@
 """Events sort, vehicles pagination ve /api/version testleri."""
 import time
-import pytest
 from ai.schema import EventRecord
 
 

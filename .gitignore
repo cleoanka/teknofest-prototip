@@ -45,3 +45,7 @@ speed_eval.log
 .claude/scheduled_tasks.lock
 .claude/agents/
 .claude/skills/
+
+# Yarışma dokümanları (şartname/FTR şablon PDF+DOCX — büyük, repo LFS değil → commit'lenmez)
+*.pdf
+*.docx

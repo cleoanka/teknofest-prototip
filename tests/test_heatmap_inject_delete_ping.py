@@ -1,6 +1,5 @@
 """Heatmap, test event inject, single event delete ve ping testleri."""
 import time
-import pytest
 from ai.schema import EventRecord
 
 

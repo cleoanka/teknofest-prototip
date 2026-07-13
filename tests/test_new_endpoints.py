@@ -1,6 +1,5 @@
 """Yeni endpoint testleri — vehicles/{plate}, events/{id}, export, qod/sessions."""
 import time
-import pytest
 from backend.db import EventStore
 from ai.schema import EventRecord
 

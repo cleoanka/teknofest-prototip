@@ -25,7 +25,7 @@ from ai.plate_pnp import estimate_plate_pose, default_focal_px
 from ai.schema import BBox
 from config.settings import get_settings
 from eval.speed_eval import (
-    make_scene, _seed_scale_field, mae_mape, _IMG,
+    make_scene, mae_mape, _IMG,
     run_independent_gt_eval, project_plate_pinhole, _PP, _FRAME_W,
 )
 

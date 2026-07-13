@@ -4,9 +4,7 @@ Veri indirme manifest/planlama testleri (ai/training/fetch_data.py).
 Plan.md Bölüm 4 (veri kaynakları) + Risk 11 (lisans). Saf, ağsız testler — gerçek
 indirme (fetch_roboflow/fetch_http_zip) test edilmez, yalnız manifest mantığı (K4).
 """
-import json
 
-import pytest
 
 from ai.training.fetch_data import (
     Source,

@@ -1,6 +1,5 @@
 """Olay filtreleme parametreleri testleri."""
 import time
-import pytest
 from backend.db import EventStore
 from ai.schema import EventRecord
 

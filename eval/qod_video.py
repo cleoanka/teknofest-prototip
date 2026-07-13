@@ -20,7 +20,7 @@ import glob
 import os
 import sys
 from collections import Counter
-from typing import Iterator, Optional
+from typing import Iterator
 
 import numpy as np
 

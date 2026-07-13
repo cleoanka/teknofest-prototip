@@ -16,7 +16,7 @@ Bu modül saf cv2/numpy'dir; cv2 yoksa zarifçe girdomeyi olduğu gibi döndür�
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 

@@ -1,6 +1,4 @@
 """GET /api/settings, /.well-known/jwks.json, WS /ws/status, plate validasyon testleri."""
-import time
-import pytest
 
 
 # ── /api/settings ────────────────────────────────────────────────────────────
