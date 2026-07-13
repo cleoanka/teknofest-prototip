@@ -314,7 +314,7 @@ Swagger UI: `http://localhost:8000/docs`
 ## 9. Tasarım Kararları
 
 **Mock-first (K4):** Her modül kütüphane yoksa mock'a düşer. `AI_MODE=auto` — ultralytics/easyocr/mediapipe
-yoksa sistem çökmez, 73 test her ortamda yeşil kalır. Yeni modül eklerken aynı desen zorunlu.
+yoksa sistem çökmez, 358 test her ortamda yeşil kalır. Yeni modül eklerken aynı desen zorunlu.
 
 **Config-first (K3):** Tüm eşik, sabit ve model yolu `config/settings.py`'de. Hardcode yok.
 Tek bir değişiklik her yere yayılır.
