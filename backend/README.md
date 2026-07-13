@@ -386,7 +386,7 @@ AI_MODE=mock LP_MOCK=true pytest -q
 pytest tests/test_auth.py tests/test_events_api.py tests/test_v15_features.py -v
 ```
 
-**Test kapsamı (308 test, 27 dosya):**
+**Test kapsamı (358 test, 33 dosya):**
 
 | Dosya | Kapsam |
 |---|---|

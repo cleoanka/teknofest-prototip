@@ -1,0 +1,32 @@
+# TEKNOFEST 2026 — 5G & YZ Akıllı Yol Güvenliği Prototipi
+# Proje paket olarak dağıtılmıyor; bu dosya yalnız araç yapılandırması içindir
+# (ruff lint + pytest). Bağımlılıklar requirements.txt üzerinden yönetilir.
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = [
+    ".venv",
+    "mobile",
+    "node_modules",
+    "runs",
+    "datasets",
+]
+
+[tool.ruff.lint]
+# pyflakes (F) + pycodestyle hataları (E) — varsayılan çekirdek.
+select = ["E", "F"]
+# Kod tabanının bilinçli stili:
+#   E501 — satır uzunluğu tavsiye (bkz .editorconfig); mevcut kod sabit sınır uygulamıyor.
+#   E702 — kompakt guard/atama satırları (ör. `if x: return; y = z`) yaygın kullanılıyor.
+#   E741 — matematik/CV kodunda tek-harf değişken (l = uzunluk) okunabilir.
+ignore = ["E501", "E702", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+# Testler ve eval/araç betikleri: sys.path kurulumu sonrası import ve
+# okunabilirlik için tutulan yardımcı atamalar kabul edilir.
+"tests/**" = ["F841", "E402"]
+"eval/**" = ["F841", "F541", "E402"]
+"tools/**" = ["E402"]
+
+# pytest yapılandırması pytest.ini içindedir (tek kaynak).
